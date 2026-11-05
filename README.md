@@ -1,38 +1,71 @@
 # grupo-venus
 
-Agentic skill that acts as a conversational frontend for [grupovenus.com](https://grupovenus.com) — natal charts, transit forecasts, and compatibility reports, all from the free tier.
+An agent skill that acts as a conversational frontend for [grupovenus.com](https://grupovenus.com): natal charts, transit forecasts and transit interpretations, all from the free tier.
 
 > **Unofficial.** Not affiliated with or endorsed by Grupo Venus.
+
+**Node.js 18+** · **OpenClaw, Claude Code, Codex, Copilot, Factory, Pi and any Agent Skills host** · **MIT**
 
 ---
 
 ## What it does
 
 - Fetches and displays **natal chart images**
-- Parses **1-year slow-planet transit graphs** (Saturn, Uranus, Neptune, Pluto) and identifies the most active transits by intensity and timing
-- Retrieves **interpretation texts** in three styles: colloquial, technical, and potentials
-- Generates **compatibility reports** between two people (synastry, friendship, composite chart)
-- Stores people across sessions in a local memory file
-- Adapts its reading style per person: `casual`, `deep`, or `practical`
+- Parses **1-year slow-planet transit graphs** (Saturn, Uranus, Neptune, Pluto) into peaks, intensities and active windows
+- Retrieves **interpretation texts** in three styles: colloquial, technical and potentials
+- Compares two people's transit years
+- Stores people across sessions, and imports and exports the person list format of grupovenus.com
+- Adapts its reading style per person: `casual`, `deep` or `practical`
 
-No API key required. Uses the public free tier of grupovenus.com as-is.
-
----
-
-## Requirements
-
-- `curl`
-- `python3` (for URL-decoding the registration response)
+No API key required.
 
 ---
 
-## People storage
+## A light client
 
-Person data is stored locally at:
+- People come from the site's own downloaded list, or from birth data: the city and country are sent to [Photon](https://photon.komoot.io) for coordinates, and the time zone is worked out locally from a bundled table. Adding someone costs zero requests to grupovenus.com.
+- Every site request goes through the bundled helper, which queues requests one at a time, pauses between them and caches every response. Interpretation texts and chart images are fetched once.
+
+---
+
+## Install
+
+**OpenClaw:** [ClawHub](https://clawhub.ai/apresmoi/skills/grupo-venus).
+
+**Claude Code:**
+
+```sh
+claude plugin marketplace add apresmoi/grupo-venus
+claude plugin install grupo-venus@grupo-venus
+```
+
+**Codex:**
+
+```sh
+codex plugin marketplace add apresmoi/grupo-venus
+codex plugin add grupo-venus@grupo-venus
+```
+
+**Any other host:**
+
+```sh
+npx skills add apresmoi/grupo-venus
+```
+
+Copilot CLI, Factory Droid, Pi, Kiro, Grok, Antigravity, Cursor and OpenCode: see [docs/installation.md](docs/installation.md).
+
+---
+
+## Storage
 
 ```
-~/.openclaw/workspace/memory/grupo-venus.json
+~/.grupo-venus/grupo-venus.json     # people
+~/.grupo-venus/grupo-venus-cache/   # cached responses
 ```
+
+Existing OpenClaw data in `~/.openclaw/workspace/memory/` keeps being used. Set `GRUPO_VENUS_HOME` to choose another folder.
+
+**Privacy:** birth data (name, birth date and time, place, sex) is sent to grupovenus.com, an unofficial third-party site, and city names to photon.komoot.io. The agent asks before saving anyone, and suggests a first name or alias. Files are readable by your user only. Ask the agent to remove a person, or to forget everything, at any time.
 
 ---
 
@@ -42,14 +75,23 @@ Person data is stored locally at:
 |---------|-----------|
 | Natal chart image | ✅ |
 | 1-year outer planet transits (Sat–Plu) | ✅ |
-| 3-day / 1-week short forecasts | ✅ |
+| 3-day / 1-week / 2-week short forecasts | ✅ |
 | Transit interpretation texts | ✅ |
-| Compatibility reports (partial) | ✅ |
 | Full natal report text | Ticket required |
 | 2-year forecast | Ticket required |
 
 ---
 
+## Development
+
+```sh
+npm test
+```
+
+Offline tests for the helper, the manifests and the installer.
+
+---
+
 ## License
 
-MIT
+MIT. `skills/grupo-venus/data/zone.tab` comes from the public-domain [IANA time zone database](https://www.iana.org/time-zones).

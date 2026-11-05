@@ -1,0 +1,36 @@
+{
+  "name": "grupo-venus",
+  "description": "Natal charts, transit forecasts and transit interpretations from grupovenus.com, with people stored across sessions.",
+  "version": "0.2.2",
+  "author": {
+    "name": "apresmoi",
+    "url": "https://github.com/apresmoi"
+  },
+  "homepage": "https://github.com/apresmoi/grupo-venus",
+  "repository": "https://github.com/apresmoi/grupo-venus",
+  "license": "MIT",
+  "keywords": [
+    "astrology",
+    "birth-chart",
+    "carta-astral",
+    "transits",
+    "horoscope"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Grupo Venus astrology",
+    "shortDescription": "Natal charts and transit forecasts",
+    "longDescription": "Natal charts, transit forecasts and transit interpretations from grupovenus.com, with people stored across sessions. One skill with a dependency-free Node.js helper that queues, paces and caches every request to grupovenus.com.",
+    "developerName": "apresmoi",
+    "category": "Lifestyle",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/apresmoi/grupo-venus",
+    "defaultPrompt": [
+      "Show me my natal chart and what's active this year.",
+      "Add my partner and compare our years."
+    ]
+  }
+}

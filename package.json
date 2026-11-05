@@ -1,0 +1,49 @@
+{
+  "name": "grupo-venus",
+  "private": true,
+  "version": "0.2.2",
+  "description": "Natal charts, transit forecasts and transit interpretations from grupovenus.com, with people stored across sessions.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/gv.test.mjs test/package.test.mjs",
+    "install:skills": "node install.mjs",
+    "uninstall:skills": "node uninstall.mjs"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "apresmoi",
+    "url": "https://github.com/apresmoi"
+  },
+  "homepage": "https://github.com/apresmoi/grupo-venus",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apresmoi/grupo-venus.git"
+  },
+  "keywords": [
+    "astrology",
+    "birth-chart",
+    "carta-astral",
+    "transits",
+    "horoscope",
+    "pi-package"
+  ],
+  "pi": {
+    "skills": [
+      "./skills/grupo-venus"
+    ]
+  },
+  "files": [
+    ".claude-plugin/",
+    ".codex-plugin/",
+    ".agents/plugins/",
+    ".factory-plugin/",
+    "skills/grupo-venus/",
+    "docs/installation.md",
+    "install.mjs",
+    "uninstall.mjs",
+    "scripts/manage-skills.mjs"
+  ]
+}

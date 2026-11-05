@@ -1,0 +1,16 @@
+{
+  "name": "grupo-venus",
+  "description": "Natal charts, transit forecasts and transit interpretations from grupovenus.com, with people stored across sessions.",
+  "owner": {
+    "name": "apresmoi",
+    "url": "https://github.com/apresmoi"
+  },
+  "plugins": [
+    {
+      "name": "grupo-venus",
+      "description": "Natal charts, transit forecasts and transit interpretations from grupovenus.com, with people stored across sessions.",
+      "source": "./",
+      "category": "lifestyle"
+    }
+  ]
+}

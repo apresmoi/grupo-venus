@@ -1,0 +1,20 @@
+{
+  "name": "grupo-venus",
+  "interface": {
+    "displayName": "Grupo Venus astrology"
+  },
+  "plugins": [
+    {
+      "name": "grupo-venus",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Lifestyle"
+    }
+  ]
+}
