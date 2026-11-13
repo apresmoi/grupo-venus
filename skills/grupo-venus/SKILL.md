@@ -55,7 +55,7 @@ Requests per action, before caching:
 | Interpretation text | 1 per transit and style (then cached forever) |
 | Paid: ticket status | 2 |
 | Paid: list reports | 1 |
-| Paid: read a report | 1 (then cached forever) |
+| Paid: read a report | 1 (cached with `--for KEY`) |
 | Paid: create a report | 1 to 3, plus one ticket credit |
 | Numerology | 1 or 2 |
 
@@ -204,7 +204,7 @@ gv ticket set 'CODE'      # stored owner-only; output shows it masked
 gv ticket                 # status: credits_left, reports_created, expires, days_left, valid (2 requests)
 gv ticket --offline       # only whether one is stored (masked), no request
 gv reports                # reports made with the ticket in the last 180 days: id, person, type, plus expiry
-gv read 'ID'              # full text of one report, as markdown; no credit used, cached for good
+gv read 'ID' --for KEY    # full text of one report, as markdown; no credit used. --for keeps a local copy under that saved person
 gv make KEY --report=62 --yes            # create a report: uses ONE ticket credit
 gv make KEY --with KEY2 --report=16 --yes  # two-person report (synastry)
 gv make KEY --report=13 --start 2027-01-01 --city 'Madrid' --country 'España' --yes   # solar return for 2027, living in Madrid
@@ -218,7 +218,7 @@ Rules:
 - **Confirm every `make`** with the user, naming the report and that it uses one credit; `--yes` records that confirmation. Report `credits_left` from the output. A report already made here comes back as `cached`: no request, no credit.
 - Returns and progressions are cast for where the person **is** at that date. Ask where they live (or will be) if it may differ from the birth place, and pass `--city`/`--country` in the site's spelling (Spanish country names, US states by name). The birth place is the default.
 - Asking again for the same person, report and date is free: the site recognizes it and the output says `existing`.
-- A created report is kept by grupovenus.com under the ticket for 180 days, then deleted there; say so when confirming a `make`. `gv read` keeps a local copy of what it reads. `gv remove` deletes the copies that name that person; copies for anyone not saved here stay until `gv forget`.
+- A created report is kept by grupovenus.com under the ticket for 180 days, then deleted there; say so when confirming a `make`. `gv read` keeps a local copy only with `--for KEY`, under that saved person, and `gv remove KEY` deletes it. Without `--for` nothing is kept.
 - Two-person reports take the second person with `--with KEY2` (or `--line2 'LINE'`). Both people go to grupovenus.com, so the second one needs the same consent as anyone else.
 - Reports come in the language of `--lang` (E is Spanish). Answer in the user's language anyway.
 

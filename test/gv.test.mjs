@@ -65,7 +65,7 @@ test('transits parse from cache: codes upper-cased, retrograde windows, peak ran
     s.run('import', join(FIX, 'lista.html'));
     const day = '2026-11-07';
     mkdirSync(join(s.home, 'grupo-venus-cache', 'transits'), { recursive: true });
-    copyFileSync(join(FIX, 'transits.html'), join(s.home, 'grupo-venus-cache', 'transits', `luis-alberto-spinetta-8-${day}.html`));
+    copyFileSync(join(FIX, 'transits.html'), join(s.home, 'grupo-venus-cache', 'transits', `luis-alberto-spinetta~8-${day}.html`));
     const { transits } = JSON.parse(s.run('transits', 'luis-alberto-spinetta', `--start=${day}`));
     assert.deepEqual(transits.map(t => t.code), ['URASEXASC', 'PLUTRIMER']);
     const ura = transits[0];
@@ -95,8 +95,8 @@ test('people file is owner-only; remove and forget delete personal data and its 
     if (process.platform !== 'win32') assert.equal(statSync(join(s.home, 'grupo-venus.json')).mode & 0o777, 0o600);
     const cache = join(s.home, 'grupo-venus-cache');
     for (const d of ['chart', 'transits', 'interp']) mkdirSync(join(cache, d), { recursive: true });
-    writeFileSync(join(cache, 'chart', 'luis-alberto-spinetta-T-E.png'), 'x');
-    writeFileSync(join(cache, 'transits', 'luis-alberto-spinetta-8-2026-11-07.html'), 'x');
+    writeFileSync(join(cache, 'chart', 'luis-alberto-spinetta~T-E.png'), 'x');
+    writeFileSync(join(cache, 'transits', 'luis-alberto-spinetta~8-2026-11-07.html'), 'x');
     writeFileSync(join(cache, 'interp', 'transiaw-PLUTRIMER.html'), 'x');
     assert.equal(JSON.parse(s.run('remove', 'luis-alberto-spinetta', '--yes')).cached_files_deleted, 2);
     assert.deepEqual(JSON.parse(s.run('list')), {});
@@ -159,34 +159,37 @@ test('paid reports: make needs --yes and a known id, read parses a cached report
     assert.throws(() => s.run('read', '../../x'), e => /usage: read ID/.test(e.stderr));
     const reports = join(s.home, 'grupo-venus-cache', 'reports');
     mkdirSync(reports, { recursive: true });
-    copyFileSync(join(FIX, 'report.html'), join(reports, 'tic-2026-11-5-21-1-39.html'));
-    const text = s.run('read', '2026-11-5 21:1:39');
+    copyFileSync(join(FIX, 'report.html'), join(reports, 'luis-alberto-spinetta~tic-2026-11-5-21-1-39.html'));
+    assert.throws(() => s.run('read', '2026-11-5 21:1:39', '--for', 'nobody'), e => /unknown person/.test(e.stderr));
+    const text = s.run('read', '2026-11-5 21:1:39', '--for', 'luis-alberto-spinetta');
     assert.match(text, /^### Interpretación de la Carta Astral para: Luis$/m);
     assert.match(text, /^## Capítulo 1 : Su Perspectiva ante la Vida$/m);
     assert.match(text, /^### Ascendente en Leo\n\nFerozmente orgulloso, desea impresionar y ser visto como alguien especial\.\n\nSegundo párrafo\.$/m);
     assert.match(text, /^### Urano Conjunción Mercurio \(URACJCMER\), 12\/12\/2026\n\nIdeas nuevas\.$/m);
     assert.doesNotMatch(text, /^### (12\/12\/2026|Tránsitos ordenados)/m, 'date grid cells are not headings');
-    copyFileSync(join(FIX, 'report.html'), join(reports, 'luis-alberto-spinetta-62-E-T-x.html'));
+    copyFileSync(join(FIX, 'report.html'), join(reports, 'luis-alberto-spinetta~62-E-T-x.html'));
     const made = JSON.parse(s.run('make', 'luis-alberto-spinetta', '--report=62', '--yes'));
     assert.ok(made.cached && !('credits_left' in made), 'a cached report must not show an old credit count');
     assert.ok(!existsSync(join(s.home, 'grupo-venus-cache', '.last')), 'cached reports must not touch the network');
     assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--report=62', '--fullname', 'X', '--yes'), e => /for numerology/.test(e.stderr));
     assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--report=945', '--fullname', 'a;b'), e => /no semicolons/.test(e.stderr));
     s.run('ticket', 'clear');
-    copyFileSync(join(FIX, 'report.html'), join(reports, 'luis-alberto-spinetta-945-E-T-x.html'));
+    copyFileSync(join(FIX, 'report.html'), join(reports, 'luis-alberto-spinetta~945-E-T-x.html'));
     assert.match(JSON.parse(s.run('make', 'luis-alberto-spinetta', '--report=945')).text, /Ascendente en Leo/, 'free numerology needs no ticket and no --yes');
     assert.ok(!existsSync(join(s.home, 'grupo-venus-cache', '.last')), 'cached reports must not touch the network');
-    writeFileSync(join(reports, 'tic-2026-1-1-1-1-1.html'), 'Carta Astral para: Luis Alberto Spinetta');
-    // Neighbours stay: a key that extends this one, and a report naming someone whose name only contains this one.
+    // A neighbour stays: a key that extends this one.
     s.run('import', join(FIX, 'lista.html'));
     const db = JSON.parse(readFileSync(join(s.home, 'grupo-venus.json'), 'utf8'));
     db.people['luis-alberto-spinetta-jr'] = { ...db.people['luis-alberto-spinetta'], name: 'Otro' };
     writeFileSync(join(s.home, 'grupo-venus.json'), JSON.stringify(db));
-    const kept = ['luis-alberto-spinetta-jr-62-E-T-x.html', 'tic-2026-2-2-2-2-2.html'];
+    const kept = ['luis-alberto-spinetta-jr~62-E-T-x.html', 'luis-alberto-spinetta-jr~tic-2026-2-2-2-2-2.html'];
     writeFileSync(join(reports, kept[0]), 'x');
-    writeFileSync(join(reports, kept[1]), 'para: Luis Alberto Spinettango');
-    assert.equal(JSON.parse(s.run('remove', 'luis-alberto-spinetta', '--yes')).cached_files_deleted, 3, 'copies saved by read go too');
-    assert.ok(!existsSync(join(reports, 'tic-2026-1-1-1-1-1.html')));
+    // Shared reports go whichever side the removed person is on, also next to a key that extends theirs; so do files named the old way.
+    const gone = ['luis-alberto-spinetta+luis-alberto-spinetta-jr~16-E-T-x.html', 'luis-alberto-spinetta-jr+luis-alberto-spinetta~16-E-T-x.html', 'luis-alberto-spinetta-66-E-T-x.html', 'tic-2026-1-1-1-1-1.html'];
+    for (const f of gone) writeFileSync(join(reports, f), 'x');
+    writeFileSync(join(reports, kept[1]), 'x');
+    assert.equal(JSON.parse(s.run('remove', 'luis-alberto-spinetta', '--yes')).cached_files_deleted, 7, 'copies saved by read go too');
+    for (const f of gone) assert.ok(!existsSync(join(reports, f)), f);
     for (const f of kept) assert.ok(existsSync(join(reports, f)), f);
   } finally { s.done(); }
 });
@@ -212,7 +215,7 @@ test('site flows, scripted: return place form, second-person picker, numerology,
     assert.match(r.sent[1].body, /^urldestino=infrevsol\.asp&DIA1=1&MES1=1&ANO1=2027&14PAIS=Espa%F1a&08CIUDAD=Madrid&boton1=Calcular$/);
     assert.equal(r.sent[2].cookie, 'ASPSESSIONIDX=abc', 'the session cookie follows the redirect');
     assert.equal(JSON.parse(r.stdout).credits_left, 41);
-    assert.deepEqual(files(), [`${KEY}-13-E-T-2027-01-01-madrid-espana.html`]);
+    assert.deepEqual(files(), [`${KEY}~13-E-T-2027-01-01-madrid-espana.html`]);
 
     // Two people: both go in the person-list cookies, the second is picked in a form. An unsaved one is not cached.
     const ana = 'Ana;3/4/1990 10:00:00 AM;Madrid;España;H;;-1;40N25;3W42';
@@ -234,10 +237,19 @@ test('site flows, scripted: return place form, second-person picker, numerology,
     assert.ok(!('credits_left' in JSON.parse(r.stdout)));
     assert.equal(files().length, 1, 'a report made with --fullname is not cached');
 
-    // A repeat: the site links to the earlier report, which is read (here from the local copy) at no cost.
-    copyFileSync(join(FIX, 'report.html'), join(reports, 'tic-2026-11-5-21-1-39.html'));
-    r = s.site([{ path: 'informes3.asp', body: `YA EXISTE <a href="informes11.asp?tic=${TIC}&fec=2026-11-5 21:1:39">ver</a>` }], 'make', KEY, '--report=62', '--yes');
+    // A repeat: the site links to the earlier report, which is read at no cost and kept under the person's key.
+    r = s.site([
+      { path: 'informes3.asp', body: `YA EXISTE <a href="informes11.asp?tic=${TIC}&fec=2026-11-5 21:1:39">ver</a>` },
+      { path: 'informes11.asp', body: REPORT },
+    ], 'make', KEY, '--report=62', '--yes');
     assert.match(JSON.parse(r.stdout).existing, /no credit used/);
+    assert.deepEqual(files(), [`${KEY}~13-E-T-2027-01-01-madrid-espana.html`, `${KEY}~62-E-T-x.html`]);
+
+    // read keeps a copy only when told whose it is.
+    s.site([{ path: 'informes11.asp', body: REPORT }], 'read', '2026-3-3 3:3:3');
+    assert.equal(files().length, 2, 'read without --for keeps nothing');
+    s.site([{ path: 'informes11.asp', body: REPORT }], 'read', '2026-3-3 3:3:3', '--for', KEY);
+    assert.ok(files().includes(`${KEY}~tic-2026-3-3-3-3-3.html`));
 
     // The same repeat for an unsaved person is read from the site and nothing is kept.
     const before = files();
@@ -247,7 +259,7 @@ test('site flows, scripted: return place form, second-person picker, numerology,
     ], 'make', '--line', ana, '--report=62', '--yes');
     assert.match(JSON.parse(r.stdout).existing, /no credit used/);
     assert.deepEqual(files(), before, 'no report is written for an unsaved person');
-    if (process.platform !== 'win32') assert.equal(statSync(join(reports, `${KEY}-13-E-T-2027-01-01-madrid-espana.html`)).mode & 0o777, 0o600, 'cached reports are owner-only');
+    if (process.platform !== 'win32') assert.equal(statSync(join(reports, `${KEY}~13-E-T-2027-01-01-madrid-espana.html`)).mode & 0o777, 0o600, 'cached reports are owner-only');
 
     // A redirect to another host is refused: the person and session cookies go nowhere else.
     assert.throws(() => s.site([{ path: 'informes3.asp', status: 302, headers: { location: 'https://example.com/x' } }], 'make', KEY, '--report=66', '--yes'),

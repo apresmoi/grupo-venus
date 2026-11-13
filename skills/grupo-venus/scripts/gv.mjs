@@ -280,24 +280,20 @@ function cmdExport(file) {
   out({ file: target, note: target.startsWith(EXPORTS + sep) ? 'inside the data folder; forget deletes it' : 'outside the data folder; forget does not delete it' });
 }
 
-/** Delete a person and the cached files made from their data: those under their key, and report copies that name them. */
+/** Delete a person and every cached file made from their data.
+ * A cache file is named PEOPLE~REST, PEOPLE being the key or KEY1+KEY2: "~" and "+" cannot occur in a key, so the match is exact. */
 function cmdRemove(key, o) {
   if (!o.yes) die('remove deletes data: confirm with the user, then pass --yes');
-  const db = load(), { name } = person(key); delete db.people[key]; save(db);
+  const db = load(); person(key); delete db.people[key]; save(db);
   let files = 0;
-  // Another person's key may extend this one ("ana" and "ana-maria"): their files stay.
-  const longer = Object.keys(db.people).filter(k => k.startsWith(`${key}-`));
-  const theirs = f => longer.some(k => f.startsWith(`${k}-`) || f.startsWith(`${k}+`) || f.includes(`+${k}-`));
-  // Copies saved by read are named by report id, so they are matched by the person's name inside, as a whole word.
-  const named = new RegExp(`(?<!\\p{L})${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\p{L})`, 'u');
+  // Files from before 0.3.4 have no "~" and no exact owner: they are matched by prefix, and old report copies
+  // (tic-...) all go. That can only delete too much, never too little, and the site still has those reports.
+  const owns = f => f.includes('~') ? f.split('~')[0].split('+').includes(key)
+    : f.startsWith('tic-') || f.startsWith(`${key}-`) || f.startsWith(`${key}+`) || f.includes(`+${key}-`);
   for (const dir of ['chart', 'transits', 'reports']) {
     const d = join(CACHE, dir);
     if (!existsSync(d)) continue;
-    for (const f of readdirSync(d)) {
-      const mine = f.startsWith('tic-') ? named.test(decodeEntities(latin1.decode(readFileSync(join(d, f)))))
-        : (f.startsWith(`${key}-`) || f.startsWith(`${key}+`) || f.includes(`+${key}-`)) && !theirs(f);
-      if (mine) { rmSync(join(d, f)); files++; }
-    }
+    for (const f of readdirSync(d)) if (owns(f)) { rmSync(join(d, f)); files++; }
   }
   out({ removed: key, cached_files_deleted: files });
 }
@@ -324,7 +320,7 @@ function subject(key, o) {
 }
 
 async function cmdChart(arg, o) {
-  const { p, key } = subject(arg, o), cacheKey = key && `chart/${key}-${o.zodiac}-${o.lang}.png`;
+  const { p, key } = subject(arg, o), cacheKey = key && `chart/${key}~${o.zodiac}-${o.lang}.png`;
   const data = await fetchSite('dibujo.aspx', {
     cacheKey, params: {
       fec: p.birthdate, aju: p.tz_offset, ciu: p.city, pais: p.country, lat: p.lat_decimal, lon: p.lon_decimal,
@@ -392,7 +388,7 @@ function cachedStart(key, rid, today) {
   if (rid !== '8') return today;
   for (let back = 0; back < 15; back++) {
     const s = new Date(today - back * 864e5);
-    if (existsSync(join(CACHE, 'transits', `${key}-${rid}-${s.toISOString().slice(0, 10)}.html`))) return s;
+    if (existsSync(join(CACHE, 'transits', `${key}~${rid}-${s.toISOString().slice(0, 10)}.html`))) return s;
   }
   return today;
 }
@@ -401,7 +397,7 @@ async function cmdTransits(arg, o) {
   const { p, key } = subject(arg, o);
   const start = o.start ? new Date(`${o.start}T00:00:00Z`) : key ? cachedStart(key, o.report, todayUTC()) : todayUTC();
   const day = start.toISOString().slice(0, 10);
-  const doc = await report(line(p), o.report, start, o, key && `transits/${key}-${o.report}-${day}.html`);
+  const doc = await report(line(p), o.report, start, o, key && `transits/${key}~${o.report}-${day}.html`);
   out({ report: o.report, start: day, transits: parseBars(doc).slice(0, Number(o.top || 40)) });
 }
 
@@ -496,15 +492,15 @@ async function cmdReports() {
   const reports = [...doc.matchAll(/title="([^"]*)">([^<]*)<\/a><\/b>[\s\S]*?informes11\.asp\?tic=[^&]+&fec=([^"]+)"[^>]*>([^<]+)</gi)]
     .map(([, info, name, fec, type]) => ({ id: fec, person: decodeEntities(name).trim(), type: decodeEntities(type).trim(), birth: decodeEntities(info).replace(/\s+/g, ' ').trim() }));
   const exp = /caducidad del ticket\s*:\s*([\d-]+)/i.exec(doc);
-  out({ ticket_expires: exp ? exp[1] : null, reports, next: 'read ID costs no credit; make costs one' });
+  out({ ticket_expires: exp ? exp[1] : null, reports, next: 'read ID costs no credit (add --for KEY to keep a local copy for a saved person); make costs one' });
 }
 
-/** An existing report: no credit used, cached for good (the server deletes it after 180 days). */
-async function readReport(id, cache = true) {
+/** An existing report: no credit used. A local copy is kept only when the caller names the saved person it belongs to. */
+async function readReport(id, owner = null) {
   if (!FEC_RE.test(id || '')) die('usage: read ID (an id from reports, like "2026-11-5 21:1:39")');
-  return latin1.decode(await fetchSite('informes11.asp', { params: { tic: ticket(), fec: id }, cacheKey: cache ? `reports/tic-${id.replace(/\D+/g, '-')}.html` : null, keep: isReport }));
+  return latin1.decode(await fetchSite('informes11.asp', { params: { tic: ticket(), fec: id }, cacheKey: owner && `reports/${owner}~tic-${id.replace(/\D+/g, '-')}.html`, keep: isReport }));
 }
-const cmdRead = async id => out(reportText(await readReport(id)));
+const cmdRead = async (id, o) => { if (o.for) person(o.for); out(reportText(await readReport(id, o.for))); };
 
 /** Hidden inputs of the first form in html, as a browser would send them. */
 function hiddenFields(html) {
@@ -552,7 +548,7 @@ async function cmdMake(arg, o) {
   const key = pair ? key1 && q.key && `${key1}+${q.key}` : key1;
   const start = o.start ? new Date(`${o.start}T00:00:00Z`) : todayUTC(), day = start.toISOString().slice(0, 10);
   const where = { city: o.city || p.city, country: o.country || p.country };
-  const cacheKey = key && !unsaved && `reports/${key}-${o.report}-${o.lang}-${o.zodiac}-${DATED.has(o.report) ? day : 'x'}${o.city || o.country ? `-${slug(`${where.city}-${where.country}`)}` : ''}.html`;
+  const cacheKey = key && !unsaved && `reports/${key}~${o.report}-${o.lang}-${o.zodiac}-${DATED.has(o.report) ? day : 'x'}${o.city || o.country ? `-${slug(`${where.city}-${where.country}`)}` : ''}.html`;
   const file = cacheKey && join(CACHE, cacheKey);
   let doc = file && existsSync(file) ? latin1.decode(readFileSync(file)) : null, existing = false;
   const cached = !!doc;
@@ -570,7 +566,7 @@ async function cmdMake(arg, o) {
     if (/ACTION="ciuda\.asp"/i.test(doc)) doc = latin1.decode(await fetchSite('ciuda.asp', { jar, post: placeForm(doc, start, where) }));
     // Same person, report and date as an earlier one: the site charges nothing and links to it.
     const dup = /YA EXISTE/.test(doc) && /informes11\.asp\?tic=[^&"]+&fec=([^"]+)"/i.exec(doc);
-    if (dup) { doc = await readReport(decodeEntities(dup[1]), !!file); existing = true; } // nothing is kept for an unsaved person
+    if (dup) { doc = await readReport(decodeEntities(dup[1])); existing = true; }
     if (!isReport(doc)) die(`the site did not return a report: ${textOf(doc).slice(0, 300)}`);
     if (file) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, doc, { encoding: 'latin1', mode: 0o600 }); }
   }
@@ -607,7 +603,8 @@ const HELP = `Usage: node gv.mjs COMMAND [options]
                           --offline only says whether one is stored)
   ticket set CODE|clear   store (owner-only) or remove the ticket
   reports                 reports made with the ticket (last 180 days): id, person, type
-  read ID                 full text of one of those reports; no credit used
+  read ID [--for KEY]     full text of one of those reports; no credit used. With --for, a local
+                          copy is kept under that saved person (remove KEY deletes it)
   make KEY|--line L --report=ID --yes
                           create a paid report; uses one credit   [--start YYYY-MM-DD] [--lang] [--zodiac]
                           returns and progressions: [--city C --country K] where the person is then
@@ -627,7 +624,7 @@ async function main() {
       country: { type: 'string' }, sex: { type: 'string' }, style: { type: 'string' }, key: { type: 'string' },
       pick: { type: 'string' }, lang: { type: 'string', default: 'E' }, zodiac: { type: 'string', default: 'T' },
       report: { type: 'string' }, start: { type: 'string' }, top: { type: 'string' },
-      line: { type: 'string' }, save: { type: 'boolean' }, yes: { type: 'boolean' }, offline: { type: 'boolean' }, with: { type: 'string' }, line2: { type: 'string' },
+      line: { type: 'string' }, save: { type: 'boolean' }, yes: { type: 'boolean' }, offline: { type: 'boolean' }, with: { type: 'string' }, line2: { type: 'string' }, for: { type: 'string' },
       fullname: { type: 'string' }, signature: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -640,7 +637,7 @@ async function main() {
   check(/^(T|S[1-5])$/.test(o.zodiac), '--zodiac must be T or S1..S5');
   if (cmd === 'make') check(o.report in PAID || o.report in PAIR, `--report must be one of ${[...Object.keys(PAID), ...Object.keys(PAIR)].join(', ')}`);
   else { o.report ??= '8'; check(['8', '-1', '0', '1'].includes(o.report), '--report must be 8, -1, 0 or 1 (paid ones go through make)'); }
-  check(!o.with || KEY_RE.test(o.with), `bad KEY ${o.with}`);
+  for (const k of ['with', 'for']) check(!o[k] || KEY_RE.test(o[k]), `bad KEY ${o[k]}`);
   for (const k of ['fullname', 'signature']) check(!o[k] || /^[^;\r\n]{1,85}$/.test(o[k]), `--${k} must be 1 to 85 characters, no semicolons`);
   check(!o.start || /^\d{4}-\d{2}-\d{2}$/.test(o.start), '--start must be YYYY-MM-DD');
   check(!o.top || /^\d{1,3}$/.test(o.top), '--top must be a number');
@@ -660,7 +657,7 @@ async function main() {
     case 'transits': return cmdTransits(args[0], o);
     case 'ticket': return cmdTicket(args[0], args[1], o);
     case 'reports': return cmdReports();
-    case 'read': return cmdRead(args[0]);
+    case 'read': return cmdRead(args[0], o);
     case 'make': return cmdMake(args[0], o);
     case 'interp': return cmdInterp(args[0], { ...o, style: o.style || 'transiaw' });
     default: die(`unknown command ${cmd}\n\n${HELP}`);
