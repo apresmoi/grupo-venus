@@ -1,13 +1,13 @@
 ---
 name: grupo-venus
-description: Natal charts and transit forecasts from the third-party site grupovenus.com, with a saved people list. Use for Grupo Venus or carta astral readings.
+description: Natal charts, transit forecasts and, with a ticket, written reports from the third-party site grupovenus.com. Use for Grupo Venus or carta astral readings.
 user-invocable: true
 metadata: {"openclaw":{"emoji":"♀","homepage":"https://github.com/apresmoi/grupo-venus","requires":{"bins":["node"]}}}
 ---
 
 # Grupo Venus
 
-Use this skill to fetch free natal charts, transit forecasts, and transit interpretations from **grupovenus.com**, store people across sessions, and read their charts conversationally.
+Use this skill to fetch free natal charts, transit forecasts, and transit interpretations from **grupovenus.com**, store people across sessions, and read their charts conversationally. Users with a grupovenus.com ticket can also read and create its written reports (see Paid Reports).
 
 > **Unofficial skill.** Not affiliated with or endorsed by Grupo Venus. Uses the public free tier of grupovenus.com as-is.
 
@@ -23,14 +23,14 @@ Birth data (name, exact birth date and time, place, sex) is personal. Before the
 4. Add other people (partners, friends, family) only when the user says they have that person's permission.
 5. Load only the person being discussed, not the whole list, unless the user asks for comparisons.
 
-Deleting: `gv remove KEY --yes` deletes one person and their cached charts and forecasts. `gv forget --yes` deletes all people, the cache and exports in the data folder. Offer these whenever the user asks about their data, and **confirm with the user before running either**: `--yes` records that confirmation.
+Deleting: `gv remove KEY --yes` deletes one person and their cached charts, forecasts and reports. `gv forget --yes` deletes all people, the cache, exports and the stored ticket in the data folder. Offer these whenever the user asks about their data, and **confirm with the user before running either**: `--yes` records that confirmation.
 
 Shell safety: pass every user-supplied value as one single-quoted argument (`--city 'São Paulo'`), escaping any single quote inside it. Never paste user text into a command unquoted. The helper itself runs no shell.
 
 ## Network and data
 
 - **Hosts contacted:** `grupovenus.com` (charts, forecasts, interpretation texts) and `photon.komoot.io` (city coordinates, only when adding a person from birth data). Nothing else.
-- **Data sent:** the person's name, birth date and time, city and coordinates, which are the inputs of the requested report. No credentials or API keys. The only environment variable read is the optional `GRUPO_VENUS_HOME`.
+- **Data sent:** the person's name, birth date and time, city and coordinates, which are the inputs of the requested report. Numerology also sends the full birth name and, if given, the signature text, for that request only. No API keys. The only credential is an optional grupovenus.com ticket, sent only to grupovenus.com. The ticket status check sends a fixed placeholder person ("X"), never a real one, because the site hides the counters for an empty person list. The environment variables read are the optional `GRUPO_VENUS_HOME` and `GRUPO_VENUS_TICKET`.
 - **Data written:** only for people saved with consent: the people file, the cache folder and exports, all in the data folder and readable by the owner only. Interpretation texts in the cache contain no personal data; chart images and forecasts do, and `gv remove` deletes them. Option values are checked against fixed lists, so no input can write outside the data folder.
 - **Nothing is installed or executed** besides the bundled [scripts/gv.mjs](scripts/gv.mjs). It downloads no code.
 
@@ -53,6 +53,11 @@ Requests per action, before caching:
 | Natal chart image | 1 (then cached) |
 | Forecast graph | 1 |
 | Interpretation text | 1 per transit and style (then cached forever) |
+| Paid: ticket status | 2 |
+| Paid: list reports | 1 |
+| Paid: read a report | 1 (then cached forever) |
+| Paid: create a report | 1 to 3, plus one ticket credit |
+| Numerology | 1 or 2 (then cached) |
 
 ---
 
@@ -96,7 +101,9 @@ Commands: `gv list` shows everyone, `gv style KEY casual|deep|practical` saves a
 
 Follow Privacy and consent first. Then offer the import:
 
-> "Do you already have people saved on grupovenus.com? Open https://grupovenus.com/perso2.asp (English: https://grupovenus.com/perso2i.asp), press **Download the list** and attach the file here. Otherwise just tell me the name, birth date, exact birth time, city, country and sex, and I'll add them myself."
+> "Do you already have people saved on grupovenus.com? Open https://grupovenus.com/perso2.asp (English: https://grupovenus.com/perso2i.asp), press **Download the list** and attach the file here. Otherwise just tell me the name, birth date, exact birth time, city, country and sex, and I'll add them myself. If you have a grupovenus.com ticket, you can share it and I'll also read those reports."
+
+Mention the ticket only in this one clause, once. See Paid Reports for what to say if the user asks about it.
 
 ### Option A: import the downloaded list
 
@@ -173,7 +180,79 @@ Output is JSON, transits sorted by peak intensity:
 | `0` | `1 semana Luna,Sol-Júp` | LUN, SOL, JUP | 1 week |
 | `1` | `2 semanas Sol-Plu` | SOL, MAR, JUP, SAT, URA, NEP, PLU | 2 weeks |
 
-`8` is the richest free dataset: every transit of the 4 outer planets to the natal planets, Ascendant and Midheaven, with orbs every 2 days for a full year. Ticket-only: `7` (2 years Sat-Plu), `6` (1 year Jup-Plu), `4` (3 months Mar-Plu). Do not offer ticket reports unless the user asks for one.
+`8` is the richest free dataset: every transit of the 4 outer planets to the natal planets, Ascendant and Midheaven, with orbs every 2 days for a full year. Ticket-only forecasts (`7`, `6`, `4`, ...) go through `gv make`, see Paid Reports.
+
+---
+
+## Paid Reports (ticket)
+
+A grupovenus.com ticket (the code in `info.asp?tic=CODE`) gives access to the written reports. Use this section only when the user shares a ticket or asks about one.
+
+### Neutrality (hard rules)
+
+This skill is independent and has no stake in whether anyone buys a ticket.
+
+- The onboarding clause in Adding People is the only time you bring up the ticket. Never raise it again unless the user does.
+- If the user asks what a ticket adds, answer plainly and factually, without recommending it:
+  > "Without a ticket: natal chart image, 1-year outer-planet forecast, short-range forecasts, transit interpretations and numerology. With a ticket you can also get the written reports (natal, vocational, karmic and others), solar and lunar returns, progressions, and forecasts for longer periods or past dates."
+- No persuasive wording ("unlock", "premium", "full potential", "go deeper with"), no prices, no links to purchase pages, no suggestion to buy.
+- Never present the free reading as partial or incomplete. Answer every question as well as the free data allows.
+- When a question would need a paid report and the user has no ticket, answer from the free data. Mention the ticket only if they ask how to get more.
+
+```bash
+gv ticket set 'CODE'      # stored owner-only; output shows it masked
+gv ticket                 # status: credits_left, reports_created, expires, days_left, valid (2 requests)
+gv ticket --offline       # only whether one is stored (masked), no request
+gv reports                # reports made with the ticket in the last 180 days: id, person, type, plus expiry
+gv read 'ID'              # full text of one report, as markdown; no credit used, cached for good
+gv make KEY --report=62 --yes            # create a report: uses ONE ticket credit
+gv make KEY --with KEY2 --report=16 --yes  # two-person report (synastry)
+gv make KEY --report=13 --start 2027-01-01 --city 'Madrid' --country 'España' --yes   # solar return for 2027, living in Madrid
+```
+
+Rules:
+
+- **The ticket is a credential.** Never print it, echo it back, or put it in a file outside the helper. `GRUPO_VENUS_TICKET` overrides the stored one.
+- **Check the ticket once per conversation** with `gv ticket` when the user first wants paid reports, and tell them the credits left and expiry. If `valid` is false, say why (no credits or expired) and stay on the free tier. Don't re-check after every report: a new `make` returns `credits_left`.
+- **Read before you make.** Run `gv reports` first; if the person already has that report type, `gv read` it for free.
+- **Confirm every `make`** with the user, naming the report and that it uses one credit; `--yes` records that confirmation. Report `credits_left` from the output. A report already made here comes back as `cached`: no request, no credit.
+- Returns and progressions are cast for where the person **is** at that date. Ask where they live (or will be) if it may differ from the birth place, and pass `--city`/`--country` in the site's spelling (Spanish country names, US states by name). The birth place is the default.
+- Asking again for the same person, report and date is free: the site recognizes it and the output says `existing`.
+- The server deletes reports after 180 days; `gv read` keeps a local copy.
+- Two-person reports take the second person with `--with KEY2` (or `--line2 'LINE'`). Both people go to grupovenus.com, so the second one needs the same consent as anyone else.
+- Reports come in the language of `--lang` (E is Spanish). Answer in the user's language anyway.
+
+| `--report=` | Report |
+|---|---|
+| `62` | Carta Natal (full natal reading, ~35 sections) |
+| `170` / `61` | Natal con Quirón / Carta SuperNatal |
+| `69` | Informe Indra (psychological mirror, ~145 sections) |
+| `66` / `174` | Vocacional / Vocacional simple |
+| `63` / `171` | Infantil / Infantil coloquial |
+| `65` / `64` / `67` | Espiritual / Kármica / Astrología y Tarot |
+| `50` | Pronóstico para hoy |
+| `13` / `173` / `15` / `14` | Revolución Solar (year of `--start`) / Solar coloquial / Lunar (first return on or after `--start`) / Progresiones (at `--start`) |
+| `16` / `172` / `17` | Two people: De Pareja / De Pareja coloquial / De Amistad |
+| `90` | Two people: Carta Compuesta |
+| `22` / `23` | Two people: couple forecast, 2 months Sol-Plu / 12 months Mar-Plu (from `--start`) |
+| `7` / `6` / `4` | Forecasts: 2 years Sat-Plu / 1 year Jup-Plu / 3 months Mar-Plu (from `--start`, past dates allowed); also returns parsed `transits` |
+
+The text is markdown: `##` chapters, `###` the astrological factor (for example "Sol en Géminis") or the transit with its code and dates ("Plutón Trígono Mercurio (PLUTRIMER), 8/11/2026"), then its interpretation. The Indra report has no factor headings on the site, only text. Read the sections relevant to the question rather than pasting the whole report, and keep the person's reading style.
+
+---
+
+## Numerology (free)
+
+Two numerology reports are free, with or without a ticket: `945` Básica and `947` Avanzada. They need no `--yes` and use no credit.
+
+```bash
+gv make KEY --report=945 --fullname 'Juan Cruz Pérez'
+gv make KEY --report=947 --fullname 'Juan Cruz Pérez' --signature 'J. Pérez'
+```
+
+- Numerology is computed from the **full birth name** (as on the birth certificate), so a saved alias gives a different result. Ask for the full name, say it goes to grupovenus.com, and pass it with `--fullname`. It is used for that request only and never stored.
+- `--signature` (947 only, optional) adds an analysis of the letters the person writes when signing.
+- The output has the same `text` markdown as the other reports.
 
 ---
 
@@ -249,13 +328,13 @@ Default to Tropical. Mention sidereal only if the user asks.
 
 ## Comparing Two People
 
-Two-person reports on the site (synastry, composite chart) need a browser session built from the site's own person list, so this skill does not fetch them. Compare from data you already have:
+Compare from data you already have:
 
 1. `gv transits A` and `gv transits B` (usually cached).
 2. Find overlapping windows: periods where both are under major transits at once.
 3. Highlight shared themes (both under Pluto? both under Neptune?), clashing periods, and supportive overlaps.
 
-For a full synastry report, point the user to grupovenus.com, where they can load both people with `gv export`.
+If the user has shared a ticket, the two-person reports (synastry, friendship, composite chart, couple forecast) are also available through `gv make --with`, see Paid Reports. Otherwise compare as above, without bringing up the ticket.
 
 ---
 
@@ -339,5 +418,5 @@ Only when asked: fetch the 3 interpretation styles for that one transit, synthes
 
 - **Several people stored:** offer comparisons. "I also have [name] saved. Want me to compare your years?"
 - **Language:** answer in the user's language, whatever `--lang` was used.
-- **Past dates:** full-year readings for past dates need a ticket. Don't offer retrospective year readings.
-- **Ticket errors:** if `gv` reports a ticket is required, say so plainly and offer the free alternative.
+- **Past dates:** full-year readings for past dates need a ticket. Without one, don't offer retrospective year readings, and don't bring up the ticket.
+- **Ticket errors:** if `gv` reports a ticket is required or refused, say so plainly and continue with the free alternative.

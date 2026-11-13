@@ -7,6 +7,7 @@
 // directory lock (parallel invocations queue instead of running at once),
 // waits PAUSE_MS since the previous request, and reads from / writes to the
 // local cache. Nothing here registers people on the server.
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -21,15 +22,39 @@ const HOME = process.env.GRUPO_VENUS_HOME
 const PEOPLE = join(HOME, 'grupo-venus.json');
 const EXPORTS = join(HOME, 'exports');
 const CACHE = join(HOME, 'grupo-venus-cache');
+const TICKET_FILE = join(HOME, 'ticket');
 const BASE = 'https://grupovenus.com';
 const PHOTON = 'https://photon.komoot.io/api/';
 const UA = 'Mozilla/5.0 (grupo-venus skill)';
 const PAUSE_MS = 2000;
 const TICKET = 'necesita obtener un Ticket';
+const TIC_RE = /^[A-Z0-9]{8,32}$/;
+const FEC_RE = /^\d{4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}:\d{1,2}$/;
+/** Paid single-person reports, by INFORMEDESEADO id. */
+const PAID = {
+  62: 'Carta Natal', 170: 'Carta Natal con Quiron', 61: 'Carta SuperNatal', 69: 'Informe Indra',
+  66: 'Informe Vocacional', 174: 'Vocacional simple', 63: 'Informe Infantil', 171: 'Informe Infantil coloquial',
+  65: 'Astrologia Espiritual', 64: 'Astrologia Karmica', 67: 'Astrologia y Tarot', 50: 'Mi pronostico para hoy',
+  13: 'Revolucion Solar', 173: 'Revolucion Solar coloquial', 15: 'Revolucion Lunar', 14: 'Progresiones',
+  7: '2 anos Sat-Plu', 6: '1 ano Jup-Plu', 4: '3 meses Mar-Plu',
+  945: 'Numerologia Basica (free)', 947: 'Numerologia Avanzada (free)',
+};
+/** Reports the site serves without a ticket or a credit. */
+const NUMEROLOGY = new Set(['945', '947']);
+/** Reports that depend on --start. The rest are the same on any day, so one cached copy serves for good. */
+const DATED = new Set(['50', '13', '173', '15', '14', '7', '6', '4', '22', '23']);
+/** Paid two-person reports: need --with KEY2 or --line2 LINE. */
+const PAIR = {
+  16: 'De Pareja', 172: 'De Pareja coloquial', 17: 'De Amistad', 90: 'Carta Compuesta',
+  22: 'Pronostico de pareja 2 meses Sol-Plu', 23: 'Pronostico de pareja 12 meses Mar-Plu',
+};
 const latin1 = new TextDecoder('latin1');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const die = msg => { process.stderr.write(`${msg}\n`); process.exit(1); };
-const out = v => process.stdout.write(typeof v === 'string' ? `${v}\n` : `${JSON.stringify(v, null, 1)}\n`);
+// The ticket is a credential: once loaded, every line printed has it masked, even text echoed from the site.
+let SECRET = '';
+const scrub = s => SECRET ? s.split(SECRET).join(`${SECRET.slice(0, 3)}...${SECRET.slice(-2)}`) : s;
+const die = msg => { process.stderr.write(`${scrub(String(msg))}\n`); process.exit(1); };
+const out = v => process.stdout.write(scrub(typeof v === 'string' ? `${v}\n` : `${JSON.stringify(v, null, 1)}\n`));
 
 // ---------- storage ----------
 
@@ -116,11 +141,21 @@ function formLatin1(params) {
   return Object.entries(params).map(([k, v]) => `${enc(k)}=${enc(v)}`).join('&');
 }
 
-async function httpGet(url, body) {
+/** With a jar (Map), cookies are kept and redirects followed by hand, like a browser session. */
+async function httpGet(url, body, extra = {}, jar = null, hops = 0) {
+  const cookie = jar?.size ? { Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') } : {};
   const res = await fetch(url, {
-    method: body ? 'POST' : 'GET', body,
-    headers: { 'User-Agent': UA, ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
+    method: body ? 'POST' : 'GET', body, redirect: jar ? 'manual' : 'follow',
+    headers: { 'User-Agent': UA, ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}), ...extra, ...cookie },
   });
+  if (jar) {
+    for (const c of res.headers.getSetCookie?.() ?? []) { const kv = c.split(';')[0], i = kv.indexOf('='); if (i > 0) jar.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim()); }
+    const to = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && to) {
+      if (hops > 3) die('too many redirects');
+      return httpGet(new URL(to, url).href, undefined, extra, jar, hops + 1);
+    }
+  }
   if (!res.ok) die(`HTTP ${res.status} from ${new URL(url).host}`);
   return Buffer.from(await res.arrayBuffer());
 }
@@ -138,7 +173,7 @@ async function withLock(fn) {
 }
 
 /** One grupovenus.com request: cached, serialized, paced. */
-async function fetchSite(path, { params, post, cacheKey }) {
+async function fetchSite(path, { params, post, cacheKey, headers, jar, keep = () => true }) {
   mkdirSync(CACHE, { recursive: true, mode: 0o700 });
   const file = cacheKey ? resolve(CACHE, cacheKey) : null;
   if (file && !file.startsWith(CACHE + sep)) die('refusing a cache path outside the cache folder');
@@ -150,12 +185,12 @@ async function fetchSite(path, { params, post, cacheKey }) {
     if (wait > 0) await sleep(wait);
     let data;
     try {
-      data = await httpGet(`${BASE}/${path}${params ? `?${formLatin1(params)}` : ''}`, post ? formLatin1(post) : undefined);
+      data = await httpGet(`${BASE}/${path}${params ? `?${formLatin1(params)}` : ''}`, post ? formLatin1(post) : undefined, headers, jar);
     } finally {
       writeFileSync(stamp, ''); const now = new Date(); utimesSync(stamp, now, now);
     }
     const text = latin1.decode(data);
-    if (file && data.length > 1000 && !text.includes(TICKET) && !text.includes('caducado')) {
+    if (file && data.length > 1000 && !text.includes(TICKET) && !text.includes('caducad') && keep(text)) {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, data);
     }
@@ -247,21 +282,23 @@ function cmdExport(file) {
 /** Delete a person and every cached file made from their data. */
 function cmdRemove(key, o) {
   if (!o.yes) die('remove deletes data: confirm with the user, then pass --yes');
-  const db = load(); person(key); delete db.people[key]; save(db);
+  const db = load(), { name } = person(key); delete db.people[key]; save(db);
   let files = 0;
-  for (const dir of ['chart', 'transits']) {
+  for (const dir of ['chart', 'transits', 'reports']) {
     const d = join(CACHE, dir);
     if (!existsSync(d)) continue;
-    for (const f of readdirSync(d)) if (f.startsWith(`${key}-`)) { rmSync(join(d, f)); files++; }
+    for (const f of readdirSync(d)) if (f.startsWith(`${key}-`) || f.startsWith(`${key}+`) || f.includes(`+${key}-`)
+      // Copies saved by read are named by report id, so they are matched by the person's name inside.
+      || (f.startsWith('tic-') && decodeEntities(latin1.decode(readFileSync(join(d, f)))).includes(name))) { rmSync(join(d, f)); files++; }
   }
   out({ removed: key, cached_files_deleted: files });
 }
 
 /** Delete everything this skill stored: people and cache. */
 function cmdForget(o) {
-  if (!o.yes) die('forget deletes all people, the cache and exports: confirm with the user, then pass --yes');
-  for (const p of [PEOPLE, CACHE, EXPORTS]) rmSync(p, { recursive: true, force: true });
-  out({ deleted: [PEOPLE, CACHE, EXPORTS] });
+  if (!o.yes) die('forget deletes all people, the cache, exports and the ticket: confirm with the user, then pass --yes');
+  for (const p of [PEOPLE, CACHE, EXPORTS, TICKET_FILE]) rmSync(p, { recursive: true, force: true });
+  out({ deleted: [PEOPLE, CACHE, EXPORTS, TICKET_FILE] });
 }
 
 function cmdStyle(key, style) {
@@ -293,17 +330,17 @@ async function cmdChart(arg, o) {
   out({ file: tmp, note: 'temporary file for this conversation; delete it when done' });
 }
 
-async function report(nombre, rid, start, o, cacheKey) {
+async function report(nombre, rid, start, o, cacheKey, tic = '', jar = null) {
   const now = new Date(), pad = n => String(n).padStart(2, '0');
   const data = await fetchSite('informes3.asp', {
-    cacheKey, post: {
+    cacheKey, jar, post: {
       nombre, urldestino: 'informes3.asp', INFORMEDESEADO: rid,
       DIA1: start.getUTCDate(), MES1: start.getUTCMonth() + 1, ANO1: start.getUTCFullYear(),
-      HORA1: pad(now.getHours()), MINU1: pad(now.getMinutes()), tipzod: o.zodiac, TIC: '', idiomas: o.lang,
+      HORA1: pad(now.getHours()), MINU1: pad(now.getMinutes()), tipzod: o.zodiac, TIC: tic, idiomas: o.lang,
     },
   });
   const text = latin1.decode(data);
-  if (text.includes(TICKET)) die('ticket required: this report or date is not in the free tier');
+  if (text.includes(TICKET)) die(tic ? 'the server refused the ticket for this report (expired, used up or not valid for it)' : 'ticket required: this report or date is not in the free tier');
   return text;
 }
 
@@ -368,6 +405,163 @@ async function cmdInterp(code, o) {
   out(textOf(latin1.decode(data)));
 }
 
+// ---------- ticket (paid reports) ----------
+
+/** The ticket is a credential: kept owner-only, never printed, never part of a cache file name. */
+function ticket(required = true) {
+  const t = (process.env.GRUPO_VENUS_TICKET || (existsSync(TICKET_FILE) ? readFileSync(TICKET_FILE, 'utf8') : '')).trim().toUpperCase();
+  if (t && !TIC_RE.test(t)) die('the stored ticket looks malformed; set it again with: ticket set CODE');
+  SECRET = t;
+  return t || (required ? die('no ticket: ask the user for their grupovenus.com ticket code, then run: ticket set CODE') : '');
+}
+const PLACEHOLDER = 'X;1/1/2000 12:00:00 PM;X;X;V;;0;0N00;0W00';
+const masked = t => `${t.slice(0, 3)}...${t.slice(-2)}`;
+
+async function cmdTicket(action, code, o = {}) {
+  if (action === 'set') {
+    const t = String(code || '').trim().toUpperCase();
+    SECRET = t;
+    if (!TIC_RE.test(t)) die('usage: ticket set CODE (letters and digits, as in info.asp?tic=CODE)');
+    mkdirSync(HOME, { recursive: true, mode: 0o700 });
+    writeFileSync(TICKET_FILE, t, { mode: 0o600 }); chmodSync(TICKET_FILE, 0o600);
+    return out({ ticket: masked(t), stored: TICKET_FILE });
+  }
+  if (action === 'clear') { rmSync(TICKET_FILE, { force: true }); return out({ ticket: null }); }
+  if (action) die('usage: ticket [set CODE | clear]');
+  const t = ticket(false);
+  const local = { ticket: t ? masked(t) : null, source: process.env.GRUPO_VENUS_TICKET ? 'GRUPO_VENUS_TICKET' : t ? TICKET_FILE : null };
+  if (!t || o.offline) return out(local);
+  out({ ...local, ...await ticketStatus(t) });
+}
+
+/** Live counters (2 requests, never cached). info.asp hides them while the browser's
+ * person list is empty, so it gets a placeholder person, never a real one. */
+async function ticketStatus(t) {
+  const info = latin1.decode(await fetchSite('info.asp', { params: { tic: t }, headers: { Cookie: `d0=${formLatin1({ x: PLACEHOLDER }).slice(2)}` } }));
+  const list = latin1.decode(await fetchSite('ticinfo.asp', { params: { tic: t } }));
+  const num = (re, doc) => { const m = re.exec(doc); return m ? +m[1] : null; };
+  const left = num(/Informes&nbsp;disponibles&nbsp;<b>(\d+)/i, info), exp = /caducidad del ticket\s*:\s*([\d-]+)/i.exec(list);
+  if (left === null && !exp) die('the server did not recognize this ticket');
+  const days = exp ? Math.ceil((Date.parse(`${exp[1]}T00:00:00Z`) - todayUTC()) / 864e5) : null;
+  return {
+    credits_left: left, reports_created: num(/Informes&nbsp;creados&nbsp;(\d+)/i, info),
+    expires: exp ? exp[1] : null, days_left: days, valid: left !== null && left > 0 && (days === null || days >= 0),
+  };
+}
+
+/** Paid report HTML to markdown: chapters (h3), factor or transit headings, paragraphs. */
+function reportText(doc) {
+  const clean = s => decodeEntities(s.replace(/\r/g, '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''))
+    .replace(/[ \t\u00a0]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{2,}/g, '\n\n').replace(/([^\n])\n(?!\n)/g, '$1 ').replace(/ {2,}/g, ' ').trim();
+  const one = s => clean(s).replace(/\s+/g, ' ');
+  const re = new RegExp([
+    /<H3>([\s\S]*?)<\/H3>/,                                                                           // chapter
+    /<font size=\+1[^>]*color="1212BF">([\s\S]*?)<\/FONT>/,                                            // natal factor
+    /<A NAME="([A-Z]{6,12})">(?:<\/A>)?\s*<center>([\s\S]{0,900}?)<font size=\+\d color="(?:green|355430)">([\s\S]*?)<\/font>/, // transit
+    /<p class="interp">([\s\S]*?)<\/p>/,                                                               // text
+  ].map(r => r.source).join('|'), 'gi');
+  const parts = [];
+  for (const [, h, f, code, when, tr, p] of doc.matchAll(re)) {
+    if (h) parts.push(`## ${one(h)}`);
+    else if (f && !/<table/i.test(f) && !/^[\d/ ]*$/.test(one(f))) parts.push(`### ${one(f)}`); // date grid cells are not headings
+    else if (tr) {
+      const w = one(when || ''), range = /\((\d+\/\d+\/\d{4})\s*hasta\s*(\d+\/\d+\/\d{4})\)/.exec(w), date = /\d+\/\d+\/\d{4}/.exec(w);
+      const dates = range ? `, ${range[1]} to ${range[2]}` : date ? `, ${date[0]}` : '';
+      parts.push(`### ${one(tr)} (${code.toUpperCase()})${dates}`);
+    }
+    else if (p && clean(p)) parts.push(clean(p));
+  }
+  return parts.length ? parts.join('\n\n') : textOf(doc);
+}
+
+/** Reports made with the ticket in the last 180 days (the server deletes older ones). */
+async function cmdReports() {
+  const doc = latin1.decode(await fetchSite('ticinfo.asp', { params: { tic: ticket() } }));
+  const reports = [...doc.matchAll(/title="([^"]*)">([^<]*)<\/a><\/b>[\s\S]*?informes11\.asp\?tic=[^&]+&fec=([^"]+)"[^>]*>([^<]+)</gi)]
+    .map(([, info, name, fec, type]) => ({ id: fec, person: decodeEntities(name).trim(), type: decodeEntities(type).trim(), birth: decodeEntities(info).replace(/\s+/g, ' ').trim() }));
+  const exp = /caducidad del ticket\s*:\s*([\d-]+)/i.exec(doc);
+  out({ ticket_expires: exp ? exp[1] : null, reports, next: 'read ID costs no credit; make costs one' });
+}
+
+/** An existing report: no credit used, cached for good (the server deletes it after 180 days). */
+async function readReport(id) {
+  if (!FEC_RE.test(id || '')) die('usage: read ID (an id from reports, like "2026-11-5 21:1:39")');
+  return latin1.decode(await fetchSite('informes11.asp', { params: { tic: ticket(), fec: id }, cacheKey: `reports/tic-${id.replace(/\D+/g, '-')}.html`, keep: isReport }));
+}
+const cmdRead = async id => out(reportText(await readReport(id)));
+
+/** Hidden inputs of the first form in html, as a browser would send them. */
+function hiddenFields(html) {
+  const form = html.slice(0, html.search(/<\/form>/i) + 1 || undefined), fields = {};
+  for (const [tag] of form.matchAll(/<input\b[^>]*type="?hidden[^>]*>/gis)) {
+    const n = /name="?([^" >]+)/i.exec(tag), v = /value="([^"]*)"/i.exec(tag);
+    if (n) fields[n[1]] = decodeEntities(v ? v[1] : '');
+  }
+  return fields;
+}
+
+const isReport = doc => /class="(interp|barras)"/i.test(doc);
+
+/** Fill the site's "place at the return" form: its hidden fields, plus date, country and city. */
+function placeForm(doc, start, where) {
+  const form = doc.slice(doc.search(/<form[^>]*ciuda\.asp/i));
+  const fields = hiddenFields(form);
+  let date = start;
+  // Lunar returns: the form lists the year's return dates; take the first on or after the start.
+  const revs = [...form.matchAll(/<option[^>]*value="(\d{4}-\d{2}-\d{2})/gi)].map(m => m[1]);
+  if (revs.length) {
+    const iso = start.toISOString().slice(0, 10), pick = revs.find(d => d >= iso) || revs.at(-1);
+    fields.rev13 = pick; date = new Date(`${pick}T00:00:00Z`);
+  }
+  // Send what a browser would: the hidden fields as they are, plus the date selects this form has.
+  const has = new Set([...form.matchAll(/<select\b[^>]*name="?([^" >]+)/gi)].map(m => m[1]));
+  const d = { DIA1: date.getUTCDate(), MES1: date.getUTCMonth() + 1, ANO1: date.getUTCFullYear() };
+  for (const [k, v] of Object.entries(d)) if (has.has(k)) fields[k] = v;
+  return { ...fields, '14PAIS': where.country, '08CIUDAD': where.city, boton1: 'Calcular' };
+}
+
+/** Create a paid report: uses one ticket credit, so only after the user confirms. */
+async function cmdMake(arg, o) {
+  const free = NUMEROLOGY.has(o.report), tic = free ? '' : ticket(), name = PAID[o.report] || PAIR[o.report];
+  const { p: p0, key: key1 } = subject(arg, o);
+  if ((o.fullname || o.signature) && !NUMEROLOGY.has(o.report)) die('--fullname and --signature are for numerology (945, 947)');
+  // Numerology reads the full birth name; it is used for this request only, never stored.
+  const p = o.fullname ? { ...p0, name: o.fullname } : p0;
+  const extra = o.fullname || o.signature ? `-n${createHash('sha256').update(`${o.fullname || ''}|${o.signature || ''}`).digest('hex').slice(0, 8)}` : '';
+  const pair = o.report in PAIR;
+  if (pair && !o.with && !o.line2) die(`'${name}' needs a second person: --with KEY2 or --line2 LINE`);
+  const q = pair ? subject(o.with, { line: o.line2 }) : null;
+  if (!pair && (o.with || o.line2)) die(`'${name}' is for one person; drop --with/--line2`);
+  if (!o.yes && !free) die(`make uses one ticket credit for '${name}': check reports first, confirm with the user, then pass --yes`);
+  const key = pair ? key1 && q.key && `${key1}+${q.key}` : key1;
+  const start = o.start ? new Date(`${o.start}T00:00:00Z`) : todayUTC(), day = start.toISOString().slice(0, 10);
+  const where = { city: o.city || p.city, country: o.country || p.country };
+  const cacheKey = key && `reports/${key}-${o.report}-${o.lang}-${o.zodiac}-${DATED.has(o.report) ? day : 'x'}${o.city || o.country ? `-${slug(`${where.city}-${where.country}`)}` : ''}${extra}.html`;
+  const file = cacheKey && join(CACHE, cacheKey);
+  let doc = file && existsSync(file) ? latin1.decode(readFileSync(file)) : null, existing = false;
+  const cached = !!doc;
+  if (!doc) {
+    const jar = new Map();
+    // Two-person reports pick the second person from the browser's person list (cookies d0, d1, ...).
+    if (pair) [p, q.p].forEach((x, i) => jar.set(`d${i}`, formLatin1({ x: line(x) }).slice(2)));
+    doc = await report(line(p), o.report, start, o, null, tic, jar);
+    const picker = pair && /<form ACTION="([\w.]+)"[^>]*>\s*<select name="nombre"/i.exec(doc);
+    if (picker) doc = latin1.decode(await fetchSite(picker[1], { jar, post: { ...hiddenFields(doc.slice(picker.index)), nombre: line(q.p) } }));
+    // Returns and progressions answer with a second form: where the person is at that date.
+    // Advanced numerology asks whether to also analyze the signature (optional).
+    if (/ACTION="numerologia2\.asp"/i.test(doc)) doc = latin1.decode(await fetchSite('numerologia2.asp', { jar, post: { ...hiddenFields(doc.slice(doc.search(/ACTION="numerologia2/i))), firma: o.signature || '', boton1: 'Continuar' } }));
+    if (/ACTION="ciuda\.asp"/i.test(doc)) doc = latin1.decode(await fetchSite('ciuda.asp', { jar, post: placeForm(doc, start, where) }));
+    // Same person, report and date as an earlier one: the site charges nothing and links to it.
+    const dup = /YA EXISTE/.test(doc) && /informes11\.asp\?tic=[^&"]+&fec=([^"]+)"/i.exec(doc);
+    if (dup) { doc = await readReport(decodeEntities(dup[1])); existing = true; }
+    if (!isReport(doc)) die(`the site did not return a report: ${textOf(doc).slice(0, 300)}`);
+    if (file) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, doc, 'latin1'); }
+  }
+  const left = /tiene ahora (\d+) informes disponibles/i.exec(doc);
+  const bars = parseBars(doc);
+  out({ report: name, start: day, ...(existing ? { existing: 'already made earlier; no credit used' } : {}), ...(cached ? { cached: 'local copy; no request, no credit used' } : free ? {} : { credits_left: left ? +left[1] : null }), ...(bars.length ? { transits: bars.slice(0, Number(o.top || 40)) } : {}), text: reportText(doc) });
+}
+
 const HELP = `Usage: node gv.mjs COMMAND [options]
 
   add --name N --date YYYY-MM-DD --time HH:MM --city C --country K --sex V|H
@@ -378,12 +572,28 @@ const HELP = `Usage: node gv.mjs COMMAND [options]
   export [FILE]           write a "Lista de personas" file (default: data folder/exports)
   list                    show stored people
   remove KEY --yes        delete a person and their cached charts and forecasts
-  forget --yes            delete all people, the cache and exports
+  forget --yes            delete all people, the cache, exports and the ticket
   style KEY STYLE         save a reading style
   chart KEY|--line L      natal chart PNG path        [--lang E|I|F] [--zodiac T|S1..S5]
   transits KEY|--line L   parsed forecast graph       [--report=8|-1|0|1] [--start YYYY-MM-DD] [--top N]
                           --line uses an unsaved person and caches nothing about them
   interp CODE             interpretation text         [--style transiaw|tratsp|starsolues]
+
+  Paid reports (need a grupovenus.com ticket):
+  ticket [--offline]      ticket status: credits left, reports created, expiry (2 requests;
+                          --offline only says whether one is stored)
+  ticket set CODE|clear   store (owner-only) or remove the ticket
+  reports                 reports made with the ticket (last 180 days): id, person, type
+  read ID                 full text of one of those reports; no credit used
+  make KEY|--line L --report=ID --yes
+                          create a paid report; uses one credit   [--start YYYY-MM-DD] [--lang] [--zodiac]
+                          returns and progressions: [--city C --country K] where the person is then
+                          (default: birth place). A repeat of an earlier report is free.
+                          ids: ${Object.entries(PAID).map(([k, v]) => `${k} ${v}`).join(', ')}
+  make KEY --report=945 [--fullname 'FULL BIRTH NAME']           free numerology, no ticket needed
+  make KEY --report=947 [--fullname F] [--signature S]       free advanced numerology
+  make KEY --with KEY2 --report=ID --yes   (or --line/--line2) two-person report
+                          ids: ${Object.entries(PAIR).map(([k, v]) => `${k} ${v}`).join(', ')}
 
 Data folder: ${HOME} (set GRUPO_VENUS_HOME to change it)`;
 
@@ -393,8 +603,9 @@ async function main() {
       name: { type: 'string' }, date: { type: 'string' }, time: { type: 'string' }, city: { type: 'string' },
       country: { type: 'string' }, sex: { type: 'string' }, style: { type: 'string' }, key: { type: 'string' },
       pick: { type: 'string' }, lang: { type: 'string', default: 'E' }, zodiac: { type: 'string', default: 'T' },
-      report: { type: 'string', default: '8' }, start: { type: 'string' }, top: { type: 'string' },
-      line: { type: 'string' }, save: { type: 'boolean' }, yes: { type: 'boolean' },
+      report: { type: 'string' }, start: { type: 'string' }, top: { type: 'string' },
+      line: { type: 'string' }, save: { type: 'boolean' }, yes: { type: 'boolean' }, offline: { type: 'boolean' }, with: { type: 'string' }, line2: { type: 'string' },
+      fullname: { type: 'string' }, signature: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -403,12 +614,15 @@ async function main() {
   const check = (ok, msg) => ok || die(msg);
   check(['E', 'I', 'F'].includes(o.lang), '--lang must be E, I or F');
   check(/^(T|S[1-5])$/.test(o.zodiac), '--zodiac must be T or S1..S5');
-  check(['8', '-1', '0', '1', '7', '6', '4'].includes(o.report), '--report must be 8, -1, 0, 1, 7, 6 or 4');
+  if (cmd === 'make') check(o.report in PAID || o.report in PAIR, `--report must be one of ${[...Object.keys(PAID), ...Object.keys(PAIR)].join(', ')}`);
+  else { o.report ??= '8'; check(['8', '-1', '0', '1'].includes(o.report), '--report must be 8, -1, 0 or 1 (paid ones go through make)'); }
+  check(!o.with || KEY_RE.test(o.with), `bad KEY ${o.with}`);
+  for (const k of ['fullname', 'signature']) check(!o[k] || /^[^;\r\n]{1,85}$/.test(o[k]), `--${k} must be 1 to 85 characters, no semicolons`);
   check(!o.start || /^\d{4}-\d{2}-\d{2}$/.test(o.start), '--start must be YYYY-MM-DD');
   check(!o.top || /^\d{1,3}$/.test(o.top), '--top must be a number');
   check(!o.pick || /^\d$/.test(o.pick), '--pick must be 0-9');
   check(!o.key || KEY_RE.test(o.key), '--key must be lowercase letters, digits and hyphens');
-  if (['chart', 'transits', 'remove', 'style'].includes(cmd) && args[0]) check(KEY_RE.test(args[0]), `bad KEY ${args[0]}`);
+  if (['chart', 'transits', 'remove', 'style', 'make'].includes(cmd) && args[0]) check(KEY_RE.test(args[0]), `bad KEY ${args[0]}`);
   if (cmd === 'interp' && args[0]) check(/^[A-Za-z]{5,12}$/.test(args[0]), 'CODE looks like SATCUAASC');
   switch (cmd) {
     case 'add': return cmdAdd(o);
@@ -420,6 +634,10 @@ async function main() {
     case 'style': return cmdStyle(args[0], args[1]);
     case 'chart': return cmdChart(args[0], o);
     case 'transits': return cmdTransits(args[0], o);
+    case 'ticket': return cmdTicket(args[0], args[1], o);
+    case 'reports': return cmdReports();
+    case 'read': return cmdRead(args[0]);
+    case 'make': return cmdMake(args[0], o);
     case 'interp': return cmdInterp(args[0], { ...o, style: o.style || 'transiaw' });
     default: die(`unknown command ${cmd}\n\n${HELP}`);
   }

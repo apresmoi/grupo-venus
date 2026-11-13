@@ -120,3 +120,55 @@ test('a malformed --line is rejected and nothing is stored', () => {
     assert.ok(!existsSync(join(s.home, 'grupo-venus.json')), 'nothing is written for an unsaved person');
   } finally { s.done(); }
 });
+
+test('ticket is stored owner-only, never printed, and forget removes it', () => {
+  const s = sandbox();
+  try {
+    assert.throws(() => s.run('reports'), e => /no ticket/.test(e.stderr));
+    assert.throws(() => s.run('ticket', 'set', '../x'), e => /usage: ticket set/.test(e.stderr));
+    const shown = s.run('ticket', 'set', 'abcd1234efgh5678');
+    assert.ok(!shown.includes('ABCD1234EFGH5678') && /ABC\.\.\.78/.test(shown));
+    if (process.platform !== 'win32') assert.equal(statSync(join(s.home, 'ticket')).mode & 0o777, 0o600);
+    assert.deepEqual(Object.keys(JSON.parse(s.run('ticket', '--offline'))), ['ticket', 'source']);
+    assert.ok(!existsSync(join(s.home, 'grupo-venus-cache', '.last')), '--offline makes no request');
+    s.run('forget', '--yes');
+    assert.ok(!existsSync(join(s.home, 'ticket')));
+  } finally { s.done(); }
+});
+
+test('paid reports: make needs --yes and a known id, read parses a cached report offline', () => {
+  const s = sandbox();
+  try {
+    s.run('import', join(FIX, 'lista.html'));
+    s.run('ticket', 'set', 'ABCD1234EFGH5678');
+    assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--report=62'), e => /one ticket credit/.test(e.stderr));
+    assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--report=999', '--yes'), e => /--report must be one of/.test(e.stderr));
+    assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--report=16', '--yes'), e => /needs a second person/.test(e.stderr));
+    assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--with', 'luis-alberto-spinetta', '--report=62', '--yes'), e => /for one person/.test(e.stderr));
+    assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--with', '../x', '--report=16', '--yes'), e => /bad KEY/.test(e.stderr));
+    assert.throws(() => s.run('transits', 'luis-alberto-spinetta', '--report=7'), e => /paid ones go through make/.test(e.stderr));
+    assert.throws(() => s.run('read', '../../x'), e => /usage: read ID/.test(e.stderr));
+    const reports = join(s.home, 'grupo-venus-cache', 'reports');
+    mkdirSync(reports, { recursive: true });
+    copyFileSync(join(FIX, 'report.html'), join(reports, 'tic-2026-11-5-21-1-39.html'));
+    const text = s.run('read', '2026-11-5 21:1:39');
+    assert.match(text, /^### Interpretación de la Carta Astral para: Luis$/m);
+    assert.match(text, /^## Capítulo 1 : Su Perspectiva ante la Vida$/m);
+    assert.match(text, /^### Ascendente en Leo\n\nFerozmente orgulloso, desea impresionar y ser visto como alguien especial\.\n\nSegundo párrafo\.$/m);
+    assert.match(text, /^### Urano Conjunción Mercurio \(URACJCMER\), 12\/12\/2026\n\nIdeas nuevas\.$/m);
+    assert.doesNotMatch(text, /^### (12\/12\/2026|Tránsitos ordenados)/m, 'date grid cells are not headings');
+    copyFileSync(join(FIX, 'report.html'), join(reports, 'luis-alberto-spinetta-62-E-T-x.html'));
+    const made = JSON.parse(s.run('make', 'luis-alberto-spinetta', '--report=62', '--yes'));
+    assert.ok(made.cached && !('credits_left' in made), 'a cached report must not show an old credit count');
+    assert.ok(!existsSync(join(s.home, 'grupo-venus-cache', '.last')), 'cached reports must not touch the network');
+    assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--report=62', '--fullname', 'X', '--yes'), e => /for numerology/.test(e.stderr));
+    assert.throws(() => s.run('make', 'luis-alberto-spinetta', '--report=945', '--fullname', 'a;b'), e => /no semicolons/.test(e.stderr));
+    s.run('ticket', 'clear');
+    copyFileSync(join(FIX, 'report.html'), join(reports, 'luis-alberto-spinetta-945-E-T-x.html'));
+    assert.match(JSON.parse(s.run('make', 'luis-alberto-spinetta', '--report=945')).text, /Ascendente en Leo/, 'free numerology needs no ticket and no --yes');
+    assert.ok(!existsSync(join(s.home, 'grupo-venus-cache', '.last')), 'cached reports must not touch the network');
+    writeFileSync(join(reports, 'tic-2026-1-1-1-1-1.html'), 'Carta Astral para: Luis Alberto Spinetta');
+    assert.equal(JSON.parse(s.run('remove', 'luis-alberto-spinetta', '--yes')).cached_files_deleted, 3, 'copies saved by read go too');
+    assert.ok(!existsSync(join(reports, 'tic-2026-1-1-1-1-1.html')));
+  } finally { s.done(); }
+});

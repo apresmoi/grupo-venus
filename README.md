@@ -1,6 +1,6 @@
 # grupo-venus
 
-An agent skill that acts as a conversational frontend for [grupovenus.com](https://grupovenus.com): natal charts, transit forecasts and transit interpretations, all from the free tier.
+An agent skill that acts as a conversational frontend for [grupovenus.com](https://grupovenus.com): natal charts, transit forecasts, transit interpretations and numerology from the free tier, plus the written reports for users who have a ticket.
 
 > **Unofficial.** Not affiliated with or endorsed by Grupo Venus.
 
@@ -15,9 +15,11 @@ An agent skill that acts as a conversational frontend for [grupovenus.com](https
 - Retrieves **interpretation texts** in three styles: colloquial, technical and potentials
 - Compares two people's transit years
 - Stores people across sessions, and imports and exports the person list format of grupovenus.com
+- Numerology reports (basic and advanced), free
 - Adapts its reading style per person: `casual`, `deep` or `practical`
+- With a grupovenus.com ticket: also reads and creates its written reports
 
-No API key required.
+No API key required. A ticket is optional and stored owner-only.
 
 ---
 
@@ -77,8 +79,9 @@ Existing OpenClaw data in `~/.openclaw/workspace/memory/` keeps being used. Set 
 | 1-year outer planet transits (Sat–Plu) | ✅ |
 | 3-day / 1-week / 2-week short forecasts | ✅ |
 | Transit interpretation texts | ✅ |
-| Full natal report text | Ticket required |
-| 2-year forecast | Ticket required |
+| Numerology, basic and advanced | ✅ |
+| Full natal and other written reports | With a ticket |
+| 2-year and other paid forecasts | With a ticket |
 
 ---
 
