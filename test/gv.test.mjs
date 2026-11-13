@@ -2,7 +2,7 @@
 // are exercised against a pre-seeded cache, which must short-circuit them.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -244,11 +244,15 @@ test('site flows, scripted: return place form, second-person picker, numerology,
     assert.deepEqual([st.credits_left, st.reports_created, st.expires, st.valid], [171, 29, '2999-10-28', true]);
     assert.ok(!r.stdout.includes(TIC));
 
-    // An unsaved person's chart is a temporary file that forget removes.
+    // An unsaved person's chart is a temporary file that expires.
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(8)]).toString('latin1');
     const chart = JSON.parse(s.site([{ path: 'dibujo.aspx', body: png }], 'chart', '--line', ana).stdout).file;
     assert.ok(existsSync(chart));
-    s.run('forget', '--yes');
-    assert.ok(!existsSync(chart));
+    s.run('list');
+    assert.ok(existsSync(chart), 'a fresh temporary chart stays');
+    const old = new Date(Date.now() - 2 * 36e5);
+    utimesSync(chart, old, old);
+    s.run('list');
+    assert.ok(!existsSync(chart), 'any run deletes temporary charts older than an hour');
   } finally { s.done(); }
 });

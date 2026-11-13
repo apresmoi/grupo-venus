@@ -1,7 +1,7 @@
 {
   "name": "grupo-venus",
   "description": "Natal charts, transit forecasts and transit interpretations from grupovenus.com, with people stored across sessions.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": {
     "name": "apresmoi",
     "url": "https://github.com/apresmoi"

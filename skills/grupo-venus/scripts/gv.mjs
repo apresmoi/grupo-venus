@@ -229,7 +229,7 @@ async function cmdAdd(o) {
   out({
     saved: !!o.save, key: o.save ? key : null, sent_to: ['photon.komoot.io (city and country only)'], zone, picked: pick,
     matches: Object.fromEntries(feats.map((x, i) => [i, label(x)])), person: p, line: line(p),
-    next: o.save ? `use KEY ${key}` : 'not saved: pass --line with the line above to chart/transits; nothing about this person is written to disk',
+    next: o.save ? `use KEY ${key}` : 'not saved: pass --line with the line above to chart/transits. Only a chart image is written for them, as a temporary file that the next helper run deletes once it is an hour old',
   });
 }
 
@@ -306,7 +306,7 @@ function cmdStyle(key, style) {
   const db = load(); person(key); db.people[key].style = style; save(db); out('ok');
 }
 
-/** A stored person by KEY, or an unsaved one from --line (never cached to disk). */
+/** A stored person by KEY, or an unsaved one from --line: no people file entry and no cache, only a short-lived chart image. */
 function subject(key, o) {
   if (o.line) {
     const [p] = parseList(o.line);
@@ -325,11 +325,18 @@ async function cmdChart(arg, o) {
   });
   if (!data.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) die('error: not a PNG');
   if (cacheKey) return out(join(CACHE, cacheKey));
-  // An unsaved person's chart: a temporary file inside the data folder, so forget removes it too.
+  // An unsaved person's chart has to be a file to be shown: a temporary one, deleted by sweepTemp on the next run once it is an hour old.
   const tmp = join(CACHE, 'tmp', `chart-${Date.now()}.png`);
   mkdirSync(dirname(tmp), { recursive: true, mode: 0o700 });
   writeFileSync(tmp, data, { mode: 0o600 });
-  out({ file: tmp, note: 'temporary file for this conversation; delete it when done (forget also removes it)' });
+  out({ file: tmp, note: 'temporary file: delete it once shown. Any run of this helper deletes it after an hour, and forget deletes it too' });
+}
+
+/** Expiry for those temporary charts: every run deletes the ones older than an hour. */
+function sweepTemp() {
+  const dir = join(CACHE, 'tmp');
+  if (!existsSync(dir)) return;
+  for (const f of readdirSync(dir)) if (Date.now() - statSync(join(dir, f)).mtimeMs > 36e5) rmSync(join(dir, f), { force: true });
 }
 
 async function report(nombre, rid, start, o, cacheKey, tic = '', jar = null) {
@@ -584,7 +591,7 @@ const HELP = `Usage: node gv.mjs COMMAND [options]
   style KEY STYLE         save a reading style
   chart KEY|--line L      natal chart PNG path        [--lang E|I|F] [--zodiac T|S1..S5]
   transits KEY|--line L   parsed forecast graph       [--report=8|-1|0|1] [--start YYYY-MM-DD] [--top N]
-                          --line uses an unsaved person and caches nothing about them
+                          --line uses an unsaved person: no cache; a chart is a temporary file, deleted by the next run after an hour
   interp CODE             interpretation text         [--style transiaw|tratsp|starsolues]
 
   Paid reports (need a grupovenus.com ticket):
@@ -618,6 +625,7 @@ async function main() {
     },
   });
   if (o.help || !cmd) return out(HELP);
+  sweepTemp();
   // Every option that reaches a request or a file name is checked against a closed set.
   const check = (ok, msg) => ok || die(msg);
   check(['E', 'I', 'F'].includes(o.lang), '--lang must be E, I or F');
