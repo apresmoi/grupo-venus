@@ -7,9 +7,8 @@
 // directory lock (parallel invocations queue instead of running at once),
 // waits PAUSE_MS since the previous request, and reads from / writes to the
 // local cache. Nothing here registers people on the server.
-import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -52,7 +51,8 @@ const latin1 = new TextDecoder('latin1');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // The ticket is a credential: once loaded, every line printed has it masked, even text echoed from the site.
 let SECRET = '';
-const scrub = s => SECRET ? s.split(SECRET).join(`${SECRET.slice(0, 3)}...${SECRET.slice(-2)}`) : s;
+const masked = t => `${t.slice(0, 3)}...${t.slice(-2)}`;
+const scrub = s => SECRET ? s.split(SECRET).join(masked(SECRET)) : s;
 const die = msg => { process.stderr.write(`${scrub(String(msg))}\n`); process.exit(1); };
 const out = v => process.stdout.write(scrub(typeof v === 'string' ? `${v}\n` : `${JSON.stringify(v, null, 1)}\n`));
 
@@ -62,7 +62,7 @@ const load = () => existsSync(PEOPLE) ? JSON.parse(readFileSync(PEOPLE, 'utf8'))
 // Birth data is personal: keep the folder and file readable by the owner only.
 const save = db => { mkdirSync(HOME, { recursive: true, mode: 0o700 }); writeFileSync(PEOPLE, JSON.stringify(db, null, 2), { mode: 0o600 }); chmodSync(PEOPLE, 0o600); };
 const KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const slug = name => name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64).replace(/-$/, '') || 'person';
+const slug = name => name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64).replace(/-$/, '') || 'person';
 
 function person(key) {
   const people = load().people;
@@ -325,9 +325,11 @@ async function cmdChart(arg, o) {
   });
   if (!data.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) die('error: not a PNG');
   if (cacheKey) return out(join(CACHE, cacheKey));
-  const tmp = join(mkdtempSync(join(tmpdir(), 'grupo-venus-')), 'chart.png');
+  // An unsaved person's chart: a temporary file inside the data folder, so forget removes it too.
+  const tmp = join(CACHE, 'tmp', `chart-${Date.now()}.png`);
+  mkdirSync(dirname(tmp), { recursive: true, mode: 0o700 });
   writeFileSync(tmp, data, { mode: 0o600 });
-  out({ file: tmp, note: 'temporary file for this conversation; delete it when done' });
+  out({ file: tmp, note: 'temporary file for this conversation; delete it when done (forget also removes it)' });
 }
 
 async function report(nombre, rid, start, o, cacheKey, tic = '', jar = null) {
@@ -415,7 +417,6 @@ function ticket(required = true) {
   return t || (required ? die('no ticket: ask the user for their grupovenus.com ticket code, then run: ticket set CODE') : '');
 }
 const PLACEHOLDER = 'X;1/1/2000 12:00:00 PM;X;X;V;;0;0N00;0W00';
-const masked = t => `${t.slice(0, 3)}...${t.slice(-2)}`;
 
 async function cmdTicket(action, code, o = {}) {
   if (action === 'set') {
@@ -525,9 +526,9 @@ async function cmdMake(arg, o) {
   const free = NUMEROLOGY.has(o.report), tic = free ? '' : ticket(), name = PAID[o.report] || PAIR[o.report];
   const { p: p0, key: key1 } = subject(arg, o);
   if ((o.fullname || o.signature) && !NUMEROLOGY.has(o.report)) die('--fullname and --signature are for numerology (945, 947)');
-  // Numerology reads the full birth name; it is used for this request only, never stored.
-  const p = o.fullname ? { ...p0, name: o.fullname } : p0;
-  const extra = o.fullname || o.signature ? `-n${createHash('sha256').update(`${o.fullname || ''}|${o.signature || ''}`).digest('hex').slice(0, 8)}` : '';
+  // Numerology reads the full birth name. It and the signature go into that one request only:
+  // a report made with either is never written to disk, because its text repeats them.
+  const p = o.fullname ? { ...p0, name: o.fullname } : p0, unsaved = o.fullname || o.signature;
   const pair = o.report in PAIR;
   if (pair && !o.with && !o.line2) die(`'${name}' needs a second person: --with KEY2 or --line2 LINE`);
   const q = pair ? subject(o.with, { line: o.line2 }) : null;
@@ -536,7 +537,7 @@ async function cmdMake(arg, o) {
   const key = pair ? key1 && q.key && `${key1}+${q.key}` : key1;
   const start = o.start ? new Date(`${o.start}T00:00:00Z`) : todayUTC(), day = start.toISOString().slice(0, 10);
   const where = { city: o.city || p.city, country: o.country || p.country };
-  const cacheKey = key && `reports/${key}-${o.report}-${o.lang}-${o.zodiac}-${DATED.has(o.report) ? day : 'x'}${o.city || o.country ? `-${slug(`${where.city}-${where.country}`)}` : ''}${extra}.html`;
+  const cacheKey = key && !unsaved && `reports/${key}-${o.report}-${o.lang}-${o.zodiac}-${DATED.has(o.report) ? day : 'x'}${o.city || o.country ? `-${slug(`${where.city}-${where.country}`)}` : ''}.html`;
   const file = cacheKey && join(CACHE, cacheKey);
   let doc = file && existsSync(file) ? latin1.decode(readFileSync(file)) : null, existing = false;
   const cached = !!doc;
@@ -549,7 +550,8 @@ async function cmdMake(arg, o) {
     if (picker) doc = latin1.decode(await fetchSite(picker[1], { jar, post: { ...hiddenFields(doc.slice(picker.index)), nombre: line(q.p) } }));
     // Returns and progressions answer with a second form: where the person is at that date.
     // Advanced numerology asks whether to also analyze the signature (optional).
-    if (/ACTION="numerologia2\.asp"/i.test(doc)) doc = latin1.decode(await fetchSite('numerologia2.asp', { jar, post: { ...hiddenFields(doc.slice(doc.search(/ACTION="numerologia2/i))), firma: o.signature || '', boton1: 'Continuar' } }));
+    const sign = doc.search(/ACTION="numerologia2\.asp"/i);
+    if (sign >= 0) doc = latin1.decode(await fetchSite('numerologia2.asp', { jar, post: { ...hiddenFields(doc.slice(sign)), firma: o.signature || '', boton1: 'Continuar' } }));
     if (/ACTION="ciuda\.asp"/i.test(doc)) doc = latin1.decode(await fetchSite('ciuda.asp', { jar, post: placeForm(doc, start, where) }));
     // Same person, report and date as an earlier one: the site charges nothing and links to it.
     const dup = /YA EXISTE/.test(doc) && /informes11\.asp\?tic=[^&"]+&fec=([^"]+)"/i.exec(doc);
@@ -559,7 +561,13 @@ async function cmdMake(arg, o) {
   }
   const left = /tiene ahora (\d+) informes disponibles/i.exec(doc);
   const bars = parseBars(doc);
-  out({ report: name, start: day, ...(existing ? { existing: 'already made earlier; no credit used' } : {}), ...(cached ? { cached: 'local copy; no request, no credit used' } : free ? {} : { credits_left: left ? +left[1] : null }), ...(bars.length ? { transits: bars.slice(0, Number(o.top || 40)) } : {}), text: reportText(doc) });
+  out({
+    report: name, start: day,
+    ...(existing ? { existing: 'already made earlier; no credit used' } : {}),
+    ...(cached ? { cached: 'local copy; no request, no credit used' } : free ? {} : { credits_left: left ? +left[1] : null }),
+    ...(bars.length ? { transits: bars.slice(0, Number(o.top || 40)) } : {}),
+    text: reportText(doc),
+  });
 }
 
 const HELP = `Usage: node gv.mjs COMMAND [options]

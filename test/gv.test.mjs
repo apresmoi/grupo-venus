@@ -2,11 +2,11 @@
 // are exercised against a pre-seeded cache, which must short-circuit them.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const GV = join(ROOT, 'skills', 'grupo-venus', 'scripts', 'gv.mjs');
@@ -17,7 +17,16 @@ function sandbox() {
   const run = (...args) => execFileSync(process.execPath, [GV, ...args], {
     env: { ...process.env, GRUPO_VENUS_HOME: home }, encoding: 'utf8',
   });
-  return { home, run, done: () => rmSync(home, { recursive: true, force: true }) };
+  // Runs the helper against scripted site answers (see mock-site.mjs); returns its output and what it sent.
+  const site = (steps, ...args) => {
+    const file = join(home, 'mock.json');
+    writeFileSync(file, JSON.stringify(steps)); rmSync(`${file}.log`, { force: true });
+    const stdout = execFileSync(process.execPath, ['--import', pathToFileURL(join(ROOT, 'test', 'mock-site.mjs')).href, GV, ...args], {
+      env: { ...process.env, GRUPO_VENUS_HOME: home, GV_MOCK: file }, encoding: 'utf8', stdio: 'pipe',
+    });
+    return { stdout, sent: readFileSync(`${file}.log`, 'utf8').trim().split('\n').map(l => JSON.parse(l)) };
+  };
+  return { home, run, site, done: () => rmSync(home, { recursive: true, force: true }) };
 }
 
 test('import reads the site list file (Latin-1, CRLF, padded names)', () => {
@@ -170,5 +179,76 @@ test('paid reports: make needs --yes and a known id, read parses a cached report
     writeFileSync(join(reports, 'tic-2026-1-1-1-1-1.html'), 'Carta Astral para: Luis Alberto Spinetta');
     assert.equal(JSON.parse(s.run('remove', 'luis-alberto-spinetta', '--yes')).cached_files_deleted, 3, 'copies saved by read go too');
     assert.ok(!existsSync(join(reports, 'tic-2026-1-1-1-1-1.html')));
+  } finally { s.done(); }
+});
+
+test('site flows, scripted: return place form, second-person picker, numerology, repeats, ticket status', () => {
+  const s = sandbox();
+  try {
+    const KEY = 'luis-alberto-spinetta', TIC = 'ABCD1234EFGH5678';
+    const reports = join(s.home, 'grupo-venus-cache', 'reports'), REPORT = readFileSync(join(FIX, 'report.html'), 'latin1');
+    const files = () => existsSync(reports) ? readdirSync(reports) : [];
+    s.run('import', join(FIX, 'lista.html'));
+    s.run('ticket', 'set', TIC);
+
+    // Solar return: the site asks where the person is that year, then redirects to the report.
+    const form = '<form METHOD="POST" ACTION="ciuda.asp"><input type="hidden" name="urldestino" value="infrevsol.asp">'
+      + '<select name="DIA1"></select><select name="MES1"></select><select name="ANO1"></select></form>';
+    let r = s.site([
+      { path: 'informes3.asp', body: form },
+      { path: 'ciuda.asp', status: 302, headers: { location: 'infrevsol.asp', 'set-cookie': 'ASPSESSIONIDX=abc; path=/' } },
+      { path: 'infrevsol.asp', body: REPORT },
+    ], 'make', KEY, '--report=13', '--start', '2027-01-01', '--city', 'Madrid', '--country', 'España', '--yes');
+    assert.match(r.sent[0].body, /INFORMEDESEADO=13&.*TIC=ABCD1234EFGH5678/);
+    assert.match(r.sent[1].body, /^urldestino=infrevsol\.asp&DIA1=1&MES1=1&ANO1=2027&14PAIS=Espa%F1a&08CIUDAD=Madrid&boton1=Calcular$/);
+    assert.equal(r.sent[2].cookie, 'ASPSESSIONIDX=abc', 'the session cookie follows the redirect');
+    assert.equal(JSON.parse(r.stdout).credits_left, 41);
+    assert.deepEqual(files(), [`${KEY}-13-E-T-2027-01-01-madrid-espana.html`]);
+
+    // Two people: both go in the person-list cookies, the second is picked in a form. An unsaved one is not cached.
+    const ana = 'Ana;3/4/1990 10:00:00 AM;Madrid;España;H;;-1;40N25;3W42';
+    r = s.site([
+      { path: 'informes3.asp', body: '<form ACTION="infcmpt.asp" METHOD="POST"><select name="nombre"><option>Ana</option></select></form>' },
+      { path: 'infcmpt.asp', body: REPORT },
+    ], 'make', KEY, '--line2', ana, '--report=16', '--yes');
+    assert.match(r.sent[0].cookie, /^d0=Luis\+Alberto\+Spinetta%3B.*; d1=Ana%3B/);
+    assert.match(r.sent[1].body, /nombre=Ana%3B3%2F4%2F1990/);
+    assert.equal(files().length, 1, 'nothing is written for an unsaved second person');
+
+    // Numerology: the full birth name and signature go in the request and are never written to disk.
+    r = s.site([
+      { path: 'informes3.asp', body: '<form ACTION="numerologia2.asp"><input type="hidden" name="p1" value="SS"><input name="firma"></form>' },
+      { path: 'numerologia2.asp', body: REPORT },
+    ], 'make', KEY, '--report=947', '--fullname', 'Luis Alberto Full', '--signature', 'L. S.');
+    assert.match(r.sent[0].body, /^nombre=Luis\+Alberto\+Full%3B.*&TIC=&/, 'free: no ticket is sent');
+    assert.equal(r.sent[1].body, 'p1=SS&firma=L.+S.&boton1=Continuar');
+    assert.ok(!('credits_left' in JSON.parse(r.stdout)));
+    assert.equal(files().length, 1, 'a report made with --fullname is not cached');
+
+    // A repeat: the site links to the earlier report, which is read (here from the local copy) at no cost.
+    copyFileSync(join(FIX, 'report.html'), join(reports, 'tic-2026-11-5-21-1-39.html'));
+    r = s.site([{ path: 'informes3.asp', body: `YA EXISTE <a href="informes11.asp?tic=${TIC}&fec=2026-11-5 21:1:39">ver</a>` }], 'make', KEY, '--report=62', '--yes');
+    assert.match(JSON.parse(r.stdout).existing, /no credit used/);
+
+    // Anything the site echoes has the ticket masked.
+    assert.throws(() => s.site([{ path: 'informes3.asp', body: `Error en el ticket ${TIC}` }], 'make', KEY, '--report=66', '--yes'),
+      e => /did not return a report: Error en el ticket ABC\.\.\.78/.test(e.stderr) && !e.stderr.includes(TIC));
+
+    // Status: the counters page gets a placeholder person, never a real one.
+    r = s.site([
+      { path: 'info.asp', body: 'Informes&nbsp;creados&nbsp;29 Informes&nbsp;disponibles&nbsp;<b>171</b>' },
+      { path: 'ticinfo.asp', body: 'Fecha de caducidad del ticket : 2999-10-28' },
+    ], 'ticket');
+    assert.equal(r.sent[0].cookie, 'd0=X%3B1%2F1%2F2000+12%3A00%3A00+PM%3BX%3BX%3BV%3B%3B0%3B0N00%3B0W00');
+    const st = JSON.parse(r.stdout);
+    assert.deepEqual([st.credits_left, st.reports_created, st.expires, st.valid], [171, 29, '2999-10-28', true]);
+    assert.ok(!r.stdout.includes(TIC));
+
+    // An unsaved person's chart is a temporary file that forget removes.
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(8)]).toString('latin1');
+    const chart = JSON.parse(s.site([{ path: 'dibujo.aspx', body: png }], 'chart', '--line', ana).stdout).file;
+    assert.ok(existsSync(chart));
+    s.run('forget', '--yes');
+    assert.ok(!existsSync(chart));
   } finally { s.done(); }
 });

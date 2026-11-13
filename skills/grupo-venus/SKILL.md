@@ -2,7 +2,7 @@
 name: grupo-venus
 description: Natal charts, transit forecasts and, with a ticket, written reports from the third-party site grupovenus.com. Use for Grupo Venus or carta astral readings.
 user-invocable: true
-metadata: {"openclaw":{"emoji":"♀","homepage":"https://github.com/apresmoi/grupo-venus","requires":{"bins":["node"]}}}
+metadata: {"openclaw":{"emoji":"♀","homepage":"https://github.com/apresmoi/grupo-venus","requires":{"bins":["node"]},"envVars":[{"name":"GRUPO_VENUS_HOME","required":false,"description":"Folder for the people file, cache and ticket. Default: ~/.grupo-venus"},{"name":"GRUPO_VENUS_TICKET","required":false,"description":"Optional grupovenus.com ticket, sent only to grupovenus.com. Overrides the stored one."}]}}
 ---
 
 # Grupo Venus
@@ -18,7 +18,7 @@ All work goes through one bundled helper, [scripts/gv.mjs](scripts/gv.mjs) (Node
 Birth data (name, exact birth date and time, place, sex) is personal. Before the first request or the first save for a person:
 
 1. Tell the user, in one or two lines, that their birth data will be sent to **grupovenus.com**, an unofficial third-party astrology site, and that the city name goes to **photon.komoot.io** to find coordinates.
-2. Ask whether to **save the person** for later sessions. `gv add` writes nothing to disk unless you pass `--save`, so pass it only on a yes. Without it, use the printed `line` with `--line` on `chart` and `transits`: nothing about that person is saved or cached, and the chart image goes to a temporary file to delete when done.
+2. Ask whether to **save the person** for later sessions. `gv add` writes nothing to disk unless you pass `--save`, so pass it only on a yes. Without it, use the printed `line` with `--line` on `chart` and `transits`: nothing about that person is saved or cached, and the chart image goes to a temporary file in the data folder: delete it when done (`gv forget` also removes it).
 3. Suggest a first name or alias instead of a full name. The name only labels the chart.
 4. Add other people (partners, friends, family) only when the user says they have that person's permission.
 5. Load only the person being discussed, not the whole list, unless the user asks for comparisons.
@@ -31,7 +31,7 @@ Shell safety: pass every user-supplied value as one single-quoted argument (`--c
 
 - **Hosts contacted:** `grupovenus.com` (charts, forecasts, interpretation texts) and `photon.komoot.io` (city coordinates, only when adding a person from birth data). Nothing else.
 - **Data sent:** the person's name, birth date and time, city and coordinates, which are the inputs of the requested report. Numerology also sends the full birth name and, if given, the signature text, for that request only. No API keys. The only credential is an optional grupovenus.com ticket, sent only to grupovenus.com. The ticket status check sends a fixed placeholder person ("X"), never a real one, because the site hides the counters for an empty person list. The environment variables read are the optional `GRUPO_VENUS_HOME` and `GRUPO_VENUS_TICKET`.
-- **Data written:** only for people saved with consent: the people file, the cache folder and exports, all in the data folder and readable by the owner only. Interpretation texts in the cache contain no personal data; chart images and forecasts do, and `gv remove` deletes them. Option values are checked against fixed lists, so no input can write outside the data folder.
+- **Data written:** only for people saved with consent: the people file, the cache folder and exports, plus the ticket if the user shares one, all in the data folder and readable by the owner only. Interpretation texts in the cache contain no personal data; chart images, forecasts and reports do, and `gv remove` deletes them. Option values are checked against fixed lists, so no input can write outside the data folder.
 - **Nothing is installed or executed** besides the bundled [scripts/gv.mjs](scripts/gv.mjs). It downloads no code.
 
 ---
@@ -57,7 +57,7 @@ Requests per action, before caching:
 | Paid: list reports | 1 |
 | Paid: read a report | 1 (then cached forever) |
 | Paid: create a report | 1 to 3, plus one ticket credit |
-| Numerology | 1 or 2 (then cached) |
+| Numerology | 1 or 2 |
 
 ---
 
@@ -250,7 +250,7 @@ gv make KEY --report=945 --fullname 'Juan Cruz Pérez'
 gv make KEY --report=947 --fullname 'Juan Cruz Pérez' --signature 'J. Pérez'
 ```
 
-- Numerology is computed from the **full birth name** (as on the birth certificate), so a saved alias gives a different result. Ask for the full name, say it goes to grupovenus.com, and pass it with `--fullname`. It is used for that request only and never stored.
+- Numerology is computed from the **full birth name** (as on the birth certificate), so a saved alias gives a different result. Ask for the full name, say it goes to grupovenus.com, and pass it with `--fullname`. It goes into that one request only: a report made with `--fullname` or `--signature` is never written to disk, because its text repeats them. Without either option the saved name is used and the report is cached like any other.
 - `--signature` (947 only, optional) adds an analysis of the letters the person writes when signing.
 - The output has the same `text` markdown as the other reports.
 
