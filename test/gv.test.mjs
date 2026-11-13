@@ -177,8 +177,17 @@ test('paid reports: make needs --yes and a known id, read parses a cached report
     assert.match(JSON.parse(s.run('make', 'luis-alberto-spinetta', '--report=945')).text, /Ascendente en Leo/, 'free numerology needs no ticket and no --yes');
     assert.ok(!existsSync(join(s.home, 'grupo-venus-cache', '.last')), 'cached reports must not touch the network');
     writeFileSync(join(reports, 'tic-2026-1-1-1-1-1.html'), 'Carta Astral para: Luis Alberto Spinetta');
+    // Neighbours stay: a key that extends this one, and a report naming someone whose name only contains this one.
+    s.run('import', join(FIX, 'lista.html'));
+    const db = JSON.parse(readFileSync(join(s.home, 'grupo-venus.json'), 'utf8'));
+    db.people['luis-alberto-spinetta-jr'] = { ...db.people['luis-alberto-spinetta'], name: 'Otro' };
+    writeFileSync(join(s.home, 'grupo-venus.json'), JSON.stringify(db));
+    const kept = ['luis-alberto-spinetta-jr-62-E-T-x.html', 'tic-2026-2-2-2-2-2.html'];
+    writeFileSync(join(reports, kept[0]), 'x');
+    writeFileSync(join(reports, kept[1]), 'para: Luis Alberto Spinettango');
     assert.equal(JSON.parse(s.run('remove', 'luis-alberto-spinetta', '--yes')).cached_files_deleted, 3, 'copies saved by read go too');
     assert.ok(!existsSync(join(reports, 'tic-2026-1-1-1-1-1.html')));
+    for (const f of kept) assert.ok(existsSync(join(reports, f)), f);
   } finally { s.done(); }
 });
 
@@ -229,6 +238,20 @@ test('site flows, scripted: return place form, second-person picker, numerology,
     copyFileSync(join(FIX, 'report.html'), join(reports, 'tic-2026-11-5-21-1-39.html'));
     r = s.site([{ path: 'informes3.asp', body: `YA EXISTE <a href="informes11.asp?tic=${TIC}&fec=2026-11-5 21:1:39">ver</a>` }], 'make', KEY, '--report=62', '--yes');
     assert.match(JSON.parse(r.stdout).existing, /no credit used/);
+
+    // The same repeat for an unsaved person is read from the site and nothing is kept.
+    const before = files();
+    r = s.site([
+      { path: 'informes3.asp', body: `YA EXISTE <a href="informes11.asp?tic=${TIC}&fec=2026-1-2 3:4:5">ver</a>` },
+      { path: 'informes11.asp', body: REPORT },
+    ], 'make', '--line', ana, '--report=62', '--yes');
+    assert.match(JSON.parse(r.stdout).existing, /no credit used/);
+    assert.deepEqual(files(), before, 'no report is written for an unsaved person');
+    if (process.platform !== 'win32') assert.equal(statSync(join(reports, `${KEY}-13-E-T-2027-01-01-madrid-espana.html`)).mode & 0o777, 0o600, 'cached reports are owner-only');
+
+    // A redirect to another host is refused: the person and session cookies go nowhere else.
+    assert.throws(() => s.site([{ path: 'informes3.asp', status: 302, headers: { location: 'https://example.com/x' } }], 'make', KEY, '--report=66', '--yes'),
+      e => /refusing a redirect to another host/.test(e.stderr));
 
     // Anything the site echoes has the ticket masked.
     assert.throws(() => s.site([{ path: 'informes3.asp', body: `Error en el ticket ${TIC}` }], 'make', KEY, '--report=66', '--yes'),

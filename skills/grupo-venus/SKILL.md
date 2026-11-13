@@ -23,15 +23,15 @@ Birth data (name, exact birth date and time, place, sex) is personal. Before the
 4. Add other people (partners, friends, family) only when the user says they have that person's permission.
 5. Load only the person being discussed, not the whole list, unless the user asks for comparisons.
 
-Deleting: `gv remove KEY --yes` deletes one person and their cached charts, forecasts and reports. `gv forget --yes` deletes all people, the cache, exports and the stored ticket in the data folder. Offer these whenever the user asks about their data, and **confirm with the user before running either**: `--yes` records that confirmation.
+Deleting: `gv remove KEY --yes` deletes one person and their cached charts, forecasts and reports. `gv forget --yes` deletes all people, the cache, the stored ticket and the exports in the data folder (an export written to a path the user chose is theirs to delete). Offer these whenever the user asks about their data, and **confirm with the user before running either**: `--yes` records that confirmation.
 
 Shell safety: pass every user-supplied value as one single-quoted argument (`--city 'São Paulo'`), escaping any single quote inside it. Never paste user text into a command unquoted. The helper itself runs no shell.
 
 ## Network and data
 
-- **Hosts contacted:** `grupovenus.com` (charts, forecasts, interpretation texts) and `photon.komoot.io` (city coordinates, only when adding a person from birth data). Nothing else.
+- **Hosts contacted:** `grupovenus.com` (charts, forecasts, interpretation texts, reports) and `photon.komoot.io` (city coordinates, only when adding a person from birth data). Nothing else: the helper refuses a redirect to any other host.
 - **Data sent:** the person's name, birth date and time, city and coordinates, which are the inputs of the requested report. Numerology also sends the full birth name and, if given, the signature text, for that request only. No API keys. The only credential is an optional grupovenus.com ticket, sent only to grupovenus.com. The ticket status check sends a fixed placeholder person ("X"), never a real one, because the site hides the counters for an empty person list. The environment variables read are the optional `GRUPO_VENUS_HOME` and `GRUPO_VENUS_TICKET`.
-- **Data written:** for people saved with consent: the people file, the cache folder and exports, plus the ticket if the user shares one. For an unsaved person: only a temporary chart image, which the next helper run deletes once it is an hour old. It is all in the data folder and readable by the owner only. Interpretation texts in the cache contain no personal data; chart images, forecasts and reports do, and `gv remove` deletes them. Option values are checked against fixed lists, so no input can write outside the data folder.
+- **Data written:** for people saved with consent: the people file, the cache folder and exports, plus the ticket if the user shares one. For an unsaved person: only a temporary chart image, which the next helper run deletes once it is an hour old. It is all in the data folder and readable by the owner only. Interpretation texts in the cache contain no personal data; chart images, forecasts and reports do, and `gv remove` deletes them. Option values are checked against fixed lists, so no option can write outside the data folder. The one exception is `gv export FILE`, which writes the list where the user says.
 - **Nothing is installed or executed** besides the bundled [scripts/gv.mjs](scripts/gv.mjs). It downloads no code.
 
 ---
@@ -40,9 +40,9 @@ Shell safety: pass every user-supplied value as one single-quoted argument (`--c
 
 grupovenus.com is a small server shared with its own users. Be a light client.
 
-- **Every grupovenus.com request goes through `gv`.** Never call the site with curl or any other tool. The helper queues requests (parallel calls wait their turn), pauses 2 seconds between them, and caches every successful response.
+- **Every grupovenus.com request goes through `gv`.** Never call the site with curl or any other tool. The helper queues requests (parallel calls wait their turn), pauses 2 seconds between them, and caches the responses for saved people (nothing is cached for an unsaved one).
 - **Never run requests in parallel**, and never prefetch "just in case". Fetch only what the current reply needs.
-- **Never register people on the server.** People come from an imported list, or from birth data with coordinates from Photon (see Adding People).
+- **Never add people to the site's person list.** People come from an imported list, or from birth data with coordinates from Photon (see Adding People). A report made with a ticket is kept by the site under that ticket (see Paid Reports).
 - **Reuse the cache.** Interpretation texts are the same for everyone and are cached forever. Chart images are cached per person. A 1-year forecast is reused for 14 days.
 
 Requests per action, before caching:
@@ -212,13 +212,13 @@ gv make KEY --report=13 --start 2027-01-01 --city 'Madrid' --country 'España' -
 
 Rules:
 
-- **The ticket is a credential.** Never print it, echo it back, or put it in a file outside the helper. `GRUPO_VENUS_TICKET` overrides the stored one.
+- **The ticket is a credential.** Never print it, echo it back, or put it in a file outside the helper. It appears once on the command line, in `gv ticket set`, and from then on only masked. `GRUPO_VENUS_TICKET` overrides the stored one.
 - **Check the ticket once per conversation** with `gv ticket` when the user first wants paid reports, and tell them the credits left and expiry. If `valid` is false, say why (no credits or expired) and stay on the free tier. Don't re-check after every report: a new `make` returns `credits_left`.
 - **Read before you make.** Run `gv reports` first; if the person already has that report type, `gv read` it for free.
 - **Confirm every `make`** with the user, naming the report and that it uses one credit; `--yes` records that confirmation. Report `credits_left` from the output. A report already made here comes back as `cached`: no request, no credit.
 - Returns and progressions are cast for where the person **is** at that date. Ask where they live (or will be) if it may differ from the birth place, and pass `--city`/`--country` in the site's spelling (Spanish country names, US states by name). The birth place is the default.
 - Asking again for the same person, report and date is free: the site recognizes it and the output says `existing`.
-- The server deletes reports after 180 days; `gv read` keeps a local copy.
+- A created report is kept by grupovenus.com under the ticket for 180 days, then deleted there; say so when confirming a `make`. `gv read` keeps a local copy of what it reads. `gv remove` deletes the copies that name that person; copies for anyone not saved here stay until `gv forget`.
 - Two-person reports take the second person with `--with KEY2` (or `--line2 'LINE'`). Both people go to grupovenus.com, so the second one needs the same consent as anyone else.
 - Reports come in the language of `--lang` (E is Spanish). Answer in the user's language anyway.
 

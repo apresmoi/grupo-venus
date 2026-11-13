@@ -63,6 +63,7 @@ Copilot CLI, Factory Droid, Pi, Kiro, Grok, Antigravity, Cursor and OpenCode: se
 ```
 ~/.grupo-venus/grupo-venus.json     # people
 ~/.grupo-venus/grupo-venus-cache/   # cached responses
+~/.grupo-venus/ticket               # optional ticket
 ```
 
 Existing OpenClaw data in `~/.openclaw/workspace/memory/` keeps being used. Set `GRUPO_VENUS_HOME` to choose another folder.

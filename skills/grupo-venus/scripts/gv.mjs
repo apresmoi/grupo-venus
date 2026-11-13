@@ -5,8 +5,9 @@
 //
 // Every grupovenus.com request goes through fetchSite(), which takes a
 // directory lock (parallel invocations queue instead of running at once),
-// waits PAUSE_MS since the previous request, and reads from / writes to the
-// local cache. Nothing here registers people on the server.
+// waits PAUSE_MS since the previous request, and caches responses for saved
+// people. Nothing here adds people to the site's person list. A report made
+// with a ticket is kept by the site under that ticket, like any made there.
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -141,22 +142,22 @@ function formLatin1(params) {
   return Object.entries(params).map(([k, v]) => `${enc(k)}=${enc(v)}`).join('&');
 }
 
-/** With a jar (Map), cookies are kept and redirects followed by hand, like a browser session. */
+/** Redirects are followed by hand and never to another host. With a jar (Map), cookies are kept like a browser session. */
 async function httpGet(url, body, extra = {}, jar = null, hops = 0) {
   const cookie = jar?.size ? { Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') } : {};
   const res = await fetch(url, {
-    method: body ? 'POST' : 'GET', body, redirect: jar ? 'manual' : 'follow',
+    method: body ? 'POST' : 'GET', body, redirect: 'manual',
     headers: { 'User-Agent': UA, ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}), ...extra, ...cookie },
   });
-  if (jar) {
-    for (const c of res.headers.getSetCookie?.() ?? []) { const kv = c.split(';')[0], i = kv.indexOf('='); if (i > 0) jar.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim()); }
-    const to = res.headers.get('location');
-    if (res.status >= 300 && res.status < 400 && to) {
-      if (hops > 3) die('too many redirects');
-      return httpGet(new URL(to, url).href, undefined, extra, jar, hops + 1);
-    }
+  if (jar) for (const c of res.headers.getSetCookie?.() ?? []) { const kv = c.split(';')[0], i = kv.indexOf('='); if (i > 0) jar.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim()); }
+  const to = res.status >= 300 && res.status < 400 && res.headers.get('location');
+  if (to) {
+    const next = new URL(to, url);
+    // Thrown, not exited on, so the request lock is always released.
+    if (hops > 3 || next.host !== new URL(url).host) throw new Error(`refusing a redirect ${hops > 3 ? 'loop' : 'to another host'} from ${new URL(url).host}`);
+    return httpGet(next.href, undefined, extra, jar, hops + 1);
   }
-  if (!res.ok) die(`HTTP ${res.status} from ${new URL(url).host}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
   return Buffer.from(await res.arrayBuffer());
 }
 
@@ -192,7 +193,7 @@ async function fetchSite(path, { params, post, cacheKey, headers, jar, keep = ()
     const text = latin1.decode(data);
     if (file && data.length > 1000 && !text.includes(TICKET) && !text.includes('caducad') && keep(text)) {
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, data);
+      writeFileSync(file, data, { mode: 0o600 });
     }
     return data;
   });
@@ -279,22 +280,29 @@ function cmdExport(file) {
   out({ file: target, note: target.startsWith(EXPORTS + sep) ? 'inside the data folder; forget deletes it' : 'outside the data folder; forget does not delete it' });
 }
 
-/** Delete a person and every cached file made from their data. */
+/** Delete a person and the cached files made from their data: those under their key, and report copies that name them. */
 function cmdRemove(key, o) {
   if (!o.yes) die('remove deletes data: confirm with the user, then pass --yes');
   const db = load(), { name } = person(key); delete db.people[key]; save(db);
   let files = 0;
+  // Another person's key may extend this one ("ana" and "ana-maria"): their files stay.
+  const longer = Object.keys(db.people).filter(k => k.startsWith(`${key}-`));
+  const theirs = f => longer.some(k => f.startsWith(`${k}-`) || f.startsWith(`${k}+`) || f.includes(`+${k}-`));
+  // Copies saved by read are named by report id, so they are matched by the person's name inside, as a whole word.
+  const named = new RegExp(`(?<!\\p{L})${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\p{L})`, 'u');
   for (const dir of ['chart', 'transits', 'reports']) {
     const d = join(CACHE, dir);
     if (!existsSync(d)) continue;
-    for (const f of readdirSync(d)) if (f.startsWith(`${key}-`) || f.startsWith(`${key}+`) || f.includes(`+${key}-`)
-      // Copies saved by read are named by report id, so they are matched by the person's name inside.
-      || (f.startsWith('tic-') && decodeEntities(latin1.decode(readFileSync(join(d, f)))).includes(name))) { rmSync(join(d, f)); files++; }
+    for (const f of readdirSync(d)) {
+      const mine = f.startsWith('tic-') ? named.test(decodeEntities(latin1.decode(readFileSync(join(d, f)))))
+        : (f.startsWith(`${key}-`) || f.startsWith(`${key}+`) || f.includes(`+${key}-`)) && !theirs(f);
+      if (mine) { rmSync(join(d, f)); files++; }
+    }
   }
   out({ removed: key, cached_files_deleted: files });
 }
 
-/** Delete everything this skill stored: people and cache. */
+/** Delete everything in the data folder: people, cache, exports and the ticket. An export written to a path the user chose is theirs to delete. */
 function cmdForget(o) {
   if (!o.yes) die('forget deletes all people, the cache, exports and the ticket: confirm with the user, then pass --yes');
   for (const p of [PEOPLE, CACHE, EXPORTS, TICKET_FILE]) rmSync(p, { recursive: true, force: true });
@@ -381,7 +389,7 @@ const todayUTC = () => { const n = new Date(); return new Date(Date.UTC(n.getFul
 
 /** Reuse a 1-year report from the last 14 days instead of requesting a new one. */
 function cachedStart(key, rid, today) {
-  if (!['8', '7', '6'].includes(rid)) return today;
+  if (rid !== '8') return today;
   for (let back = 0; back < 15; back++) {
     const s = new Date(today - back * 864e5);
     if (existsSync(join(CACHE, 'transits', `${key}-${rid}-${s.toISOString().slice(0, 10)}.html`))) return s;
@@ -492,9 +500,9 @@ async function cmdReports() {
 }
 
 /** An existing report: no credit used, cached for good (the server deletes it after 180 days). */
-async function readReport(id) {
+async function readReport(id, cache = true) {
   if (!FEC_RE.test(id || '')) die('usage: read ID (an id from reports, like "2026-11-5 21:1:39")');
-  return latin1.decode(await fetchSite('informes11.asp', { params: { tic: ticket(), fec: id }, cacheKey: `reports/tic-${id.replace(/\D+/g, '-')}.html`, keep: isReport }));
+  return latin1.decode(await fetchSite('informes11.asp', { params: { tic: ticket(), fec: id }, cacheKey: cache ? `reports/tic-${id.replace(/\D+/g, '-')}.html` : null, keep: isReport }));
 }
 const cmdRead = async id => out(reportText(await readReport(id)));
 
@@ -562,9 +570,9 @@ async function cmdMake(arg, o) {
     if (/ACTION="ciuda\.asp"/i.test(doc)) doc = latin1.decode(await fetchSite('ciuda.asp', { jar, post: placeForm(doc, start, where) }));
     // Same person, report and date as an earlier one: the site charges nothing and links to it.
     const dup = /YA EXISTE/.test(doc) && /informes11\.asp\?tic=[^&"]+&fec=([^"]+)"/i.exec(doc);
-    if (dup) { doc = await readReport(decodeEntities(dup[1])); existing = true; }
+    if (dup) { doc = await readReport(decodeEntities(dup[1]), !!file); existing = true; } // nothing is kept for an unsaved person
     if (!isReport(doc)) die(`the site did not return a report: ${textOf(doc).slice(0, 300)}`);
-    if (file) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, doc, 'latin1'); }
+    if (file) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, doc, { encoding: 'latin1', mode: 0o600 }); }
   }
   const left = /tiene ahora (\d+) informes disponibles/i.exec(doc);
   const bars = parseBars(doc);
@@ -586,8 +594,8 @@ const HELP = `Usage: node gv.mjs COMMAND [options]
   import FILE             import a grupovenus "Lista de personas" file
   export [FILE]           write a "Lista de personas" file (default: data folder/exports)
   list                    show stored people
-  remove KEY --yes        delete a person and their cached charts and forecasts
-  forget --yes            delete all people, the cache, exports and the ticket
+  remove KEY --yes        delete a person and their cached charts, forecasts and reports
+  forget --yes            delete all people, the cache, the ticket and the exports in the data folder
   style KEY STYLE         save a reading style
   chart KEY|--line L      natal chart PNG path        [--lang E|I|F] [--zodiac T|S1..S5]
   transits KEY|--line L   parsed forecast graph       [--report=8|-1|0|1] [--start YYYY-MM-DD] [--top N]
